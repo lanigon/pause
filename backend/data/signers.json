@@ -1,0 +1,12 @@
+[
+  {
+    "chainType": "evm",
+    "address": "0xDFcC6aDf45b12abeaa7b44d02524BF70F4E1Df56",
+    "unlock": "passphrase"
+  },
+  {
+    "chainType": "tron",
+    "address": "TWNYa1eTnfZxUjkYXt6CLjJDLmdKhUWQ6h",
+    "unlock": "passphrase"
+  }
+]

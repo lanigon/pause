@@ -1,0 +1,36 @@
+{
+  "name": "contract-admin-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "合约管理平台前端：业务线导航、EVM/Tron 钱包、合约暂停等运维动作",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "vue-tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@element-plus/icons-vue": "^2.3.1",
+    "element-plus": "^2.9.1",
+    "ethers": "^6.13.4",
+    "pinia": "^2.3.0",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "@vue/test-utils": "^2.5.0",
+    "happy-dom": "^20.11.12",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5",
+    "vitest": "^3.2.7",
+    "vue-tsc": "^2.1.10"
+  },
+  "engines": {
+    "node": ">=20",
+    "npm": ">=9",
+    "pnpm": ">=8"
+  }
+}

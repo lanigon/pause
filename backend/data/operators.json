@@ -1,0 +1,20 @@
+[
+  {
+    "address": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+    "label": "Alice (Admin·演示账户)",
+    "role": "admin",
+    "enabled": true
+  },
+  {
+    "address": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+    "label": "Bob (支付运维·演示账户)",
+    "role": "operator",
+    "enabled": true
+  },
+  {
+    "address": "0xDFcC6aDf45b12abeaa7b44d02524BF70F4E1Df56",
+    "label": "Owner (实链账户)",
+    "role": "admin",
+    "enabled": true
+  }
+]

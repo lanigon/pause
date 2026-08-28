@@ -1,0 +1,28 @@
+{
+  "businessLines": [
+    {
+      "id": "payment",
+      "name": "支付"
+    },
+    {
+      "id": "bridge",
+      "name": "跨链桥"
+    }
+  ],
+  "contracts": [
+    {
+      "id": "morph-pausable-live",
+      "name": "Pausable (Morph 实链)",
+      "businessLine": "payment",
+      "chain": "morph",
+      "address": "0x8A7617475C27B8f461F3CdDeCeA14A73f62C200e"
+    },
+    {
+      "id": "tron-usdt-readonly",
+      "name": "USDT-TRC20（只读验证用）",
+      "businessLine": "payment",
+      "chain": "tron",
+      "address": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+    }
+  ]
+}
