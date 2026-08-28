@@ -42,7 +42,7 @@ vi.mock('../src/lib/rpc/rpcProvider.js', () => ({ rpcProvider: { load: async () 
 
 async function loadService() {
   vi.resetModules()
-  process.env.LARK_TABLE = 'tbl_test'
+  process.env.LARK_URL = 'https://demo.feishu.cn/base/AbC123?table=tblXYZ&view=vewABC'
   const env = await import('../src/config/env.js')
   vi.spyOn(env.env, 'DATA_DIR', 'get').mockReturnValue(dataDir as './data')
   return import('../src/services/sync.service.js')
@@ -216,9 +216,9 @@ describe('Lark 同步', () => {
     expect(events[0]?.code).toBe('THROTTLED')
   })
 
-  it('未配置 LARK_TABLE 时安静降级，不当成错误', async () => {
+  it('未配置 LARK_URL 时安静降级，不当成错误', async () => {
     vi.resetModules()
-    process.env.LARK_TABLE = ''
+    process.env.LARK_URL = ''
     const envModule = await import('../src/config/env.js')
     vi.spyOn(envModule.env, 'DATA_DIR', 'get').mockReturnValue(dataDir as './data')
     const { syncFromLark } = await import('../src/services/sync.service.js')

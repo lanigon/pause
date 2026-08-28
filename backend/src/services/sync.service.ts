@@ -291,8 +291,8 @@ export async function syncFromLark(emit: SyncEmit, force = false): Promise<SyncR
 }
 
 async function runSync(emit: SyncEmit): Promise<SyncResult> {
-  if (!env.LARK_TABLE) {
-    emit(event(SyncPhase.SOURCE, false, '未配置 LARK_TABLE，使用本地数据', 'LARK_NOT_CONFIGURED'))
+  if (!env.LARK_URL) {
+    emit(event(SyncPhase.SOURCE, false, '未配置 LARK_URL，使用本地数据', 'LARK_NOT_CONFIGURED'))
     return { changed: false, fromLark: false }
   }
 
@@ -300,7 +300,7 @@ async function runSync(emit: SyncEmit): Promise<SyncResult> {
   emit(event(SyncPhase.SOURCE, true, '正在从 Lark 拉取合约与 RPC…'))
   let records: readonly LarkRecord[]
   try {
-    records = parseRows(await readTable(env.LARK_TABLE, LARK_TIMEOUT_MS))
+    records = parseRows(await readTable(env.LARK_URL, LARK_TIMEOUT_MS))
   } catch (error) {
     const code = error instanceof LarkError ? error.code : 'LARK_FAILED'
     const message = error instanceof Error ? error.message : String(error)

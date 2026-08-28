@@ -22,7 +22,7 @@ import { config as loadDotenv } from 'dotenv'
 import { readTable } from '../src/lib/lark/client.js'
 import { parseRows, toContracts, toRpcMap } from '../src/services/sync.service.js'
 
-// 脚本独立运行，也要读 .env（ALCHEMY_API_KEY / LARK_TABLE）
+// 脚本独立运行，也要读 .env（ALCHEMY_API_KEY / LARK_URL）
 loadDotenv()
 
 const DATA_DIR = './data'
@@ -34,7 +34,7 @@ const CONTRACTS_FILE = `${DATA_DIR}/contracts.json`
  * Lark 表格位置。一张表四列：业务线 · 链 · RPC · 合约。
  * 不填就跳过 Lark，只用 ChainList 的公开 RPC。
  */
-const LARK_TABLE = process.env.LARK_TABLE?.trim() ?? ''
+const LARK_URL = process.env.LARK_URL?.trim() ?? ''
 
 interface ChainDef {
   key: string
@@ -173,17 +173,17 @@ async function syncRpc(): Promise<void> {
 
   // ① Lark（优先级最高）
   let lark: Record<string, string[]> = {}
-  if (LARK_TABLE) {
+  if (LARK_URL) {
     try {
       console.log('① 从 Lark 拉取…')
-      lark = toRpcMap(parseRows(await readTable(LARK_TABLE)))
+      lark = toRpcMap(parseRows(await readTable(LARK_URL)))
       console.log(`   拿到 ${count(lark)} 个，开始探活…`)
       lark = await verifyAll(lark, chains, 'lark')
     } catch (error) {
       console.log(`   ⚠️  跳过 Lark：${(error as Error).message}\n`)
     }
   } else {
-    console.log('① Lark：未设置 LARK_TABLE，跳过')
+    console.log('① Lark：未设置 LARK_URL，跳过')
   }
 
   // ② Alchemy 运行时按 chainId 现拼，不写进 rpc.json；但这里验一下 key 与网络是否可用
@@ -265,13 +265,13 @@ async function checkAlchemy(chains: ChainDef[]): Promise<void> {
 /* ══ 合约同步 ══════════════════════════════════════════════════════════ */
 
 async function syncContracts(): Promise<void> {
-  if (!LARK_TABLE) {
-    console.log('未设置 LARK_TABLE，跳过合约同步。')
+  if (!LARK_URL) {
+    console.log('未设置 LARK_URL，跳过合约同步。')
     return
   }
 
   console.log('从 Lark 拉取合约…')
-  const payload = toContracts(parseRows(await readTable(LARK_TABLE)))
+  const payload = toContracts(parseRows(await readTable(LARK_URL)))
 
   if (payload.contracts.length === 0) {
     throw new Error('Lark 表里没有解析出任何合约，请检查表头是否为 业务线/链/RPC/合约')
@@ -335,7 +335,7 @@ async function main(): Promise<void> {
   npm run sync all        |  pnpm sync all        两个都同步
 
 RPC 三级降级：Lark → Alchemy → ChainList
-  Lark       需要 lark CLI + 环境变量 LARK_TABLE（一张表：业务线/链/RPC/合约）
+  Lark       需要 lark CLI + 环境变量 LARK_URL（一张表：业务线/链/RPC/合约）
   Alchemy    只要 ALCHEMY_API_KEY，运行时现拼，不用同步
   ChainList  公开数据，直接可用
 `)

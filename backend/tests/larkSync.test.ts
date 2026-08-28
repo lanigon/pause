@@ -120,6 +120,67 @@ describe('聚合业务线与合约', () => {
   })
 })
 
+const URL_OK = 'https://demo.feishu.cn/base/AbC123Token?table=tblXYZ789&view=vewABC'
+
+/**
+ * 表格链接解析。
+ *
+ * 配置里只让填一个 URL，所以这层是"配错了会怎样"的唯一防线 ——
+ * 报错必须说清楚下一步做什么，否则表现就是"同步不到数据"，没人查得动。
+ */
+describe('表格链接解析', () => {
+  it('从标准 base 链接里解出 appToken / tableId / viewId', async () => {
+    const { parseLarkUrl } = await import('../src/lib/lark/client.js')
+    expect(parseLarkUrl(URL_OK)).toEqual({
+      appToken: 'AbC123Token',
+      tableId: 'tblXYZ789',
+      viewId: 'vewABC',
+      isWiki: false,
+    })
+  })
+
+  it('没有 view 参数也行 —— 不带就是整张表', async () => {
+    const { parseLarkUrl } = await import('../src/lib/lark/client.js')
+    expect(parseLarkUrl('https://x.feishu.cn/base/T1?table=tbl1').viewId).toBeUndefined()
+  })
+
+  it('国际版 larksuite.com 和国内版一样认', async () => {
+    const { parseLarkUrl } = await import('../src/lib/lark/client.js')
+    expect(parseLarkUrl('https://x.larksuite.com/base/T1?table=tbl1').appToken).toBe('T1')
+  })
+
+  it('知识库托管的表格标出来 —— token 语义不同，出错时提示要不一样', async () => {
+    const { parseLarkUrl } = await import('../src/lib/lark/client.js')
+    const ref = parseLarkUrl('https://x.feishu.cn/wiki/W1?table=tbl1')
+    expect(ref).toMatchObject({ appToken: 'W1', tableId: 'tbl1', isWiki: true })
+  })
+
+  it('★ 只复制到多维表格首页（没有 ?table=）时，要说清楚该点开具体那张表', async () => {
+    const { parseLarkUrl } = await import('../src/lib/lark/client.js')
+    // 这是最常见的配错方式
+    expect(() => parseLarkUrl('https://x.feishu.cn/base/T1')).toThrow(/点开具体的那张表/)
+  })
+
+  it('粘了个裸 table id 而不是链接时，直接告诉他要贴地址栏的链接', async () => {
+    const { parseLarkUrl } = await import('../src/lib/lark/client.js')
+    expect(() => parseLarkUrl('tblXYZ789')).toThrow(/复制浏览器地址栏/)
+  })
+
+  it('链接对但不是多维表格（没有 /base/ 或 /wiki/）时也要说清楚', async () => {
+    const { parseLarkUrl } = await import('../src/lib/lark/client.js')
+    expect(() => parseLarkUrl('https://x.feishu.cn/docx/D1')).toThrow(/找不到 \/base\/ 或 \/wiki\//)
+  })
+
+  it('空值不当成"配了个坏链接"，报错要分得开', async () => {
+    const { parseLarkUrl, LarkError } = await import('../src/lib/lark/client.js')
+    try {
+      parseLarkUrl('   ')
+    } catch (error) {
+      expect((error as InstanceType<typeof LarkError>).code).toBe('LARK_BAD_URL')
+    }
+  })
+})
+
 describe('Lark 接入缺失时的行为（当前就是这种情况：本机没有 lark CLI）', () => {
   it('★ 没装 lark CLI 时给出可操作的指引，而不是一句 command not found', async () => {
     const { readTable, hasCommand, LarkError } = await import('../src/lib/lark/client.js')
@@ -127,10 +188,10 @@ describe('Lark 接入缺失时的行为（当前就是这种情况：本机没�
     // 先确认本机确实没有 —— 有的话这个断言本身就没意义
     expect(await hasCommand('lark')).toBe(false)
 
-    await expect(readTable('tbl123')).rejects.toThrow(/未检测到 lark CLI/)
+    await expect(readTable(URL_OK)).rejects.toThrow(/未检测到 lark CLI/)
 
     // 错误码要能被上层分支处理（决定降级还是报错），不能只有一句人话
-    await readTable('tbl123').catch((error: unknown) => {
+    await readTable(URL_OK).catch((error: unknown) => {
       expect(error).toBeInstanceOf(LarkError)
       expect((error as InstanceType<typeof LarkError>).code).toBe('LARK_CLI_MISSING')
       expect((error as Error).message).toContain('open.feishu.cn')

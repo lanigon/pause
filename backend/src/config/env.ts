@@ -14,7 +14,7 @@ loadDotenv()
  *
  * 环境变量只有两个，都是"这台机器特有的位置/凭证"，做不成常量：
  *   ALCHEMY_API_KEY  RPC 三级降级里的第二级，不填就降级到 Lark / ChainList
- *   LARK_TABLE       飞书表格位置，不填就跳过同步、只用本地数据
+ *   LARK_URL         飞书表格链接（浏览器地址栏原样复制），不填就跳过同步、只用本地数据
  *
  * 密钥口令不在这里：后端是本地运行的，解密交给本机的 gpg-agent / pinentry ——
  * YubiKey 场景本来就是这样（输 PIN + 触摸设备），对称加密的口令也一样由 pinentry 问。
@@ -29,8 +29,12 @@ loadDotenv()
 /** RPC 三级降级的第二级。缺失时自动降级到 Lark / ChainList */
 export const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY?.trim() || undefined
 
-/** 飞书表格位置（一张表四列：业务线/链/RPC/合约）。缺失时跳过同步，只用本地数据 */
-export const LARK_TABLE = process.env.LARK_TABLE?.trim() ?? ''
+/**
+ * 飞书表格链接（一张表四列：业务线/链/RPC/合约）。
+ * 直接贴浏览器地址栏里的完整 URL，app token 与 table id 由代码从里面解。
+ * 缺失时跳过同步，只用本地数据。
+ */
+export const LARK_URL = process.env.LARK_URL?.trim() ?? ''
 
 /* ── 其余全是常量 ────────────────────────────────────────────────────── */
 
@@ -97,7 +101,7 @@ export const env = {
   SECRETS_DIR,
   GPG_BINARY,
   ALCHEMY_API_KEY,
-  LARK_TABLE,
+  LARK_URL,
   JWT_SECRET,
   JWT_TTL_SECONDS,
   GPG_JOB_TIMEOUT_MS,
