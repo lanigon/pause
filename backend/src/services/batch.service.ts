@@ -1,13 +1,13 @@
 import type { ContractDef } from '../models/contract.model.js'
-import type { SignerDef } from '../models/signer.model.js'
 import type { OperationKind } from '../executor/operations.js'
 import { labelOf } from '../executor/operations.js'
 import type { AuthContext } from '../services/auth.service.js'
 import { assertAuthorized, execute, Phase } from '../executor/executor.js'
 import type { ChainFamily, SignPayloadFn } from '../lib/web3/index.js'
 import type { ExecutionEvent } from '../executor/executor.js'
-import { getChain, getContract, getRegistry, getSigner } from './registry.service.js'
+import { getChain, getContract, getRegistry } from './registry.service.js'
 import { openSessions } from '../lib/keys/signer.js'
+import { keyFor, type LocalKey } from '../lib/keys/store.js'
 import * as logRepo from '../repositories/log.repository.js'
 import { AppError, ErrorCode, badRequest } from '../lib/utils/errors.js'
 import { logger } from '../lib/utils/logger.js'
@@ -25,7 +25,7 @@ import { logger } from '../lib/utils/logger.js'
 export interface BatchPlan {
   readonly operation: OperationKind
   readonly contracts: readonly ContractDef[]
-  readonly signers: ReadonlyMap<ChainFamily, SignerDef>
+  readonly signers: ReadonlyMap<ChainFamily, LocalKey>
   readonly actor: AuthContext
 }
 
@@ -60,12 +60,12 @@ export function abortAll(): void {
  * 校验并生成执行计划。
  * **在读 passphrase 之前调用** —— 授权不通过的话，密钥材料根本不用参与。
  */
-export function plan(params: {
+export async function plan(params: {
   operation: OperationKind
   contractIds: readonly string[]
   actor: AuthContext
   expectedConfigVersion: string
-}): BatchPlan {
+}): Promise<BatchPlan> {
   const registry = getRegistry()
 
   // 配置漂移：前端看到的配置必须和后端当前一致
@@ -79,7 +79,7 @@ export function plan(params: {
   }
 
   const contracts = params.contractIds.map(getContract)
-  const signers = signersFor(contracts)
+  const signers = await signersFor(contracts)
 
   // 四道授权关，任一不过整批拒绝
   assertAuthorized({ contracts, signers })
@@ -88,13 +88,12 @@ export function plan(params: {
 }
 
 /** 这批合约涉及哪些链族 → 各自的签名密钥。一次任务可以跨链、跨链族 */
-function signersFor(contracts: readonly ContractDef[]): ReadonlyMap<ChainFamily, SignerDef> {
-  const signers = new Map<ChainFamily, SignerDef>()
-  for (const contract of contracts) {
-    const family = getChain(contract.chain).type
-    if (!signers.has(family)) signers.set(family, getSigner(family))
-  }
-  return signers
+async function signersFor(contracts: readonly ContractDef[]): Promise<ReadonlyMap<ChainFamily, LocalKey>> {
+  const families = new Set(contracts.map((contract) => getChain(contract.chain).type))
+  const entries = await Promise.all(
+    [...families].map(async (family) => [family, await keyFor(family)] as const),
+  )
+  return new Map(entries)
 }
 
 /** 执行。每一步都调 emit 往 SSE 推。 */
@@ -112,15 +111,12 @@ export async function run(
   let sessions: Awaited<ReturnType<typeof openSessions>> | null = null
 
   try {
-    const methods = [...new Set([...signers.values()].map((s) => s.unlock))].join('、')
-    emit(event(Phase.DECRYPT, `正在解密运维密钥（${[...signers.keys()].join('、')}，方式：${methods}）…`))
+    emit(event(Phase.DECRYPT, `正在解密运维密钥（${[...signers.keys()].join('、')}）…`))
 
     sessions = await openSessions(
-      [...signers.entries()].map(([family, signer]) => ({
-        family,
-        expectedAddress: signer.address,
-        unlock: signer.unlock,
-        source: signer.source,
+      [...signers.values()].map((key) => ({
+        family: key.family,
+        expectedAddress: key.address,
       })),
       // 需要物理触摸时立刻推给前端，否则用户会以为卡住了
       (family, label) => emit(event(Phase.DECRYPT, `请触摸 ${label} 以解锁 ${family} 密钥…`)),

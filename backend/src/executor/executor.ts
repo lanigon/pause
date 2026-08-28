@@ -11,7 +11,6 @@ import { CONTRACT_READS, PAUSED_READ } from '../lib/web3/abi.js'
 import { meta, tx } from '../lib/web3/chains.js'
 import { SigningAbortedError } from '../lib/web3/runner.js'
 import type { ContractDef } from '../models/contract.model.js'
-import type { SignerDef } from '../models/signer.model.js'
 import type { OperationKind } from './operations.js'
 import { expectedPausedState, labelOf, requiredPausedState } from './operations.js'
 import type { AuthContext } from '../services/auth.service.js'
@@ -34,7 +33,8 @@ import { logger } from '../lib/utils/logger.js'
 interface ExecuteParams {
   readonly operation: OperationKind
   readonly contracts: readonly ContractDef[]
-  readonly signers: ReadonlyMap<ChainFamily, SignerDef>
+  /** 链族 → 签名地址。执行器只要知道 from 是谁 */
+  readonly signers: ReadonlyMap<ChainFamily, { readonly address: string }>
   readonly actor: AuthContext
   /** 按链族取签名回调 —— 跨链族批量时每个链族一把密钥、一个子进程 */
   readonly signFor: (family: ChainFamily) => SignPayloadFn
@@ -123,7 +123,8 @@ export interface ExecutionSummary {
  */
 export function assertAuthorized(params: {
   readonly contracts: readonly ContractDef[]
-  readonly signers: ReadonlyMap<ChainFamily, SignerDef>
+  /** 只关心「这个链族有没有密钥」，不关心密钥长什么样 */
+  readonly signers: ReadonlyMap<ChainFamily, unknown>
 }): void {
   const missing = [
     ...new Set(

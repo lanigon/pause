@@ -5,7 +5,7 @@ import {
   providerOf,
   supportedKeySources,
 } from '../src/lib/keys/provider.js'
-import { UnlockMethod } from '../src/models/signer.model.js'
+import { UnlockMethod } from '../src/lib/keys/gpg.js'
 
 /**
  * 密钥来源的可插拔抽象。

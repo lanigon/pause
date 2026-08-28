@@ -27,15 +27,21 @@ vi.mock('../src/store/api', () => ({
   postLog: (...args: unknown[]) => postLog(...args),
 }))
 vi.mock('../src/chain/multicall', () => ({ readStates: vi.fn(async () => new Map()) }))
+const MOCK_WALLET = {
+  id: 'mock',
+  family: 'evm',
+  label: 'Mock',
+  isInstalled: () => true,
+  connect: vi.fn(),
+  signMessage: vi.fn(),
+  onAccountChange: vi.fn(),
+  sendTransaction: (...args: unknown[]) => sendTransaction(...args),
+}
+
 vi.mock('../src/chain/wallet', () => ({
-  walletFor: () => ({
-    label: 'Mock',
-    isInstalled: () => true,
-    connect: vi.fn(),
-    signMessage: vi.fn(),
-    onAccountChange: vi.fn(),
-    sendTransaction: (...args: unknown[]) => sendTransaction(...args),
-  }),
+  discoverWallets: async () => [MOCK_WALLET],
+  FAMILIES: [{ family: 'evm', label: 'EVM', signsIn: true }],
+  shorten: (a: string) => a,
 }))
 
 const REGISTRY: Registry = {
@@ -56,6 +62,8 @@ async function ready() {
   await s.bootstrap()
   s.toggle('a')
   s.toggle('b')
+  // 钱包模式要用用户连的那个钱包，这里直接塞进去
+  s.wallets = { evm: MOCK_WALLET, tron: null } as never
   return s
 }
 

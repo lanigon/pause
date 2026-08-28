@@ -1,61 +1,44 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { useStore } from '../store'
 import { ArrowDown } from '@element-plus/icons-vue'
-import { allWallets, shorten } from '../chain/wallet'
+import { useStore } from '../store'
+import { discoverWallets, FAMILIES, shorten, type WalletAdapter } from '../chain/wallet'
 import type { ChainFamily } from '../types'
 
 /**
- * 顶栏钱包区：一个「连接钱包」按钮 + 下拉，点哪个连哪个。
+ * 顶栏钱包区：EVM 和 Tron 各一个按钮，点开是那个链族下装了哪些钱包，点哪个连哪个。
  *
- * EVM 和 Tron 一视同仁 —— 都是注册表里的一项，加新链族时
- * wallet.ts 的 ADAPTERS 加一行，这里自动多一项，不用改组件。
+ * 为什么要列出来而不是直接连：用户同时装 MetaMask、OKX、Rabby 是常态，
+ * 它们会抢 window.ethereum，谁最后注入谁赢 —— 直接连的话用户根本不知道
+ * 自己在用哪个。EIP-6963 让每个钱包各自应答，选谁就用谁的 provider。
  *
- * 只有 EVM 参与登录（身份就是一个 EVM 地址）；Tron 连上只是为了
- * 在钱包模式下给 Tron 合约发交易。下拉里会标出来，免得用户
- * 连了 Tron 却发现没登录进去。
+ * 只有 EVM 参与登录（身份就是一个 EVM 地址），Tron 连上只是为了在钱包模式下
+ * 给 Tron 合约发交易。按钮上标出来，免得连了 Tron 却发现没登录进去。
  */
 const store = useStore()
-const connecting = ref<ChainFamily | null>(null)
 
-/**
- * 「装没装插件」不是响应式的 —— 用户装好插件或解锁钱包后不刷新页面，
- * 下拉里会一直显示"未安装"。每次打开下拉时 +1，强制重新探一遍。
- */
-const probe = ref(0)
+const connecting = ref<string | null>(null)
+const found = ref<Record<ChainFamily, readonly WalletAdapter[]>>({ evm: [], tron: [] })
+const scanning = ref(false)
 
-interface WalletOption {
-  family: ChainFamily
-  label: string
-  installed: boolean
-  address: string | null
-  /** 是否用于签名登录 */
-  signsIn: boolean
+/** 装没装插件不是响应式的：进页面扫一次，每次点开按钮再扫一次 */
+async function scan(family: ChainFamily): Promise<void> {
+  scanning.value = true
+  try {
+    found.value = { ...found.value, [family]: await discoverWallets(family) }
+  } finally {
+    scanning.value = false
+  }
 }
 
-const options = computed<WalletOption[]>(() => {
-  void probe.value // 依赖它，打开下拉就重算
-  return allWallets().map((wallet) => ({
-    family: wallet.family,
-    label: wallet.label,
-    installed: wallet.isInstalled(),
-    address: store.connected[wallet.family] ?? null,
-    signsIn: wallet.family === 'evm',
-  }))
-})
+onMounted(() => FAMILIES.forEach((entry) => void scan(entry.family)))
 
-const connected = computed(() => options.value.filter((option) => option.address))
-
-async function connect(option: WalletOption): Promise<void> {
-  if (!option.installed) {
-    ElMessage.warning(`未检测到${option.label}，请先安装浏览器插件`)
-    return
-  }
-  connecting.value = option.family
+async function connect(wallet: WalletAdapter): Promise<void> {
+  connecting.value = wallet.id
   try {
-    await store.connect(option.family)
-    ElMessage.success(`${option.label}已连接`)
+    await store.connect(wallet)
+    ElMessage.success(`${wallet.label} 已连接`)
   } catch (error) {
     ElMessage.error((error as Error).message)
   } finally {
@@ -74,31 +57,44 @@ async function connect(option: WalletOption): Promise<void> {
       {{ store.operator.label }}
     </el-tag>
 
-    <!-- 已连上的钱包，一个一枚，看得见现在在用哪些 -->
-    <el-tag v-for="option in connected" :key="option.family" type="info" effect="plain">
-      {{ option.label }} · {{ shorten(option.address ?? '') }}
-    </el-tag>
-
-    <el-dropdown trigger="click" @command="connect" @visible-change="probe += 1">
-      <el-button type="primary" plain :loading="connecting !== null">
-        连接钱包<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+    <el-dropdown
+      v-for="entry in FAMILIES"
+      :key="entry.family"
+      trigger="click"
+      @command="connect"
+      @visible-change="(open: boolean) => open && scan(entry.family)"
+    >
+      <el-button
+        :type="store.connected[entry.family] ? 'success' : 'primary'"
+        :loading="connecting !== null && found[entry.family].some((w) => w.id === connecting)"
+        plain
+      >
+        {{ entry.label }}
+        <template v-if="store.connected[entry.family]">
+          · {{ shorten(store.connected[entry.family] ?? '') }}
+        </template>
+        <el-icon class="el-icon--right"><ArrowDown /></el-icon>
       </el-button>
 
       <template #dropdown>
         <el-dropdown-menu>
-          <el-dropdown-item v-for="option in options" :key="option.family" :command="option">
+          <el-dropdown-item v-for="wallet in found[entry.family]" :key="wallet.id" :command="wallet">
             <div class="wallet">
-              <span class="wallet__label">{{ option.label }}</span>
-              <el-tag v-if="option.address" size="small" type="success" effect="plain">
-                {{ shorten(option.address) }}
-              </el-tag>
-              <el-tag v-else-if="!option.installed" size="small" type="info" effect="plain">
-                未安装
-              </el-tag>
-              <el-tag v-else-if="option.signsIn" size="small" type="warning" effect="plain">
-                登录用
+              <img v-if="wallet.icon" :src="wallet.icon" class="wallet__icon" alt="" />
+              <span class="wallet__label">{{ wallet.label }}</span>
+              <el-tag
+                v-if="store.wallets[entry.family]?.id === wallet.id"
+                size="small"
+                type="success"
+                effect="plain"
+              >
+                已连接
               </el-tag>
             </div>
+          </el-dropdown-item>
+
+          <el-dropdown-item v-if="found[entry.family].length === 0" disabled>
+            {{ scanning ? '检测中…' : `没有检测到 ${entry.label} 钱包` }}
           </el-dropdown-item>
         </el-dropdown-menu>
       </template>
@@ -112,11 +108,16 @@ async function connect(option: WalletOption): Promise<void> {
 .wallet {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-width: 180px;
+  gap: 8px;
+  min-width: 160px;
+}
+.wallet__icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
 }
 .wallet__label {
+  flex: 1;
   font-size: 14px;
 }
 .bar {

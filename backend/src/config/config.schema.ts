@@ -2,7 +2,6 @@ import { z } from 'zod'
 import { chainSchema } from '../models/chain.model.js'
 import { businessLineSchema, contractSchema } from '../models/contract.model.js'
 import { operatorSchema } from '../models/operator.model.js'
-import { signerSchema } from '../models/signer.model.js'
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
@@ -30,4 +29,3 @@ export const contractsFileSchema = z.object({
 
 export const operatorsFileSchema = z.array(operatorSchema).min(1)
 
-export const signersFileSchema = z.array(signerSchema).min(1)

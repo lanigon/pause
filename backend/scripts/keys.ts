@@ -29,6 +29,8 @@ import { Wallet } from 'ethers'
 import { utils as tronUtils } from 'tronweb'
 import { LOW_PIN_RETRIES } from '../src/lib/keys/card.js'
 import {
+  UnlockMethod,
+  detectUnlock,
   decryptArgsWithSecret,
   isCardBlocked,
   encryptArgs,
@@ -36,22 +38,23 @@ import {
   readCardStatus,
   remainingPinAttempts,
 } from '../src/lib/keys/gpg.js'
-import { UnlockMethod } from '../src/models/signer.model.js'
 
 type Family = 'evm' | 'tron'
 
 const FAMILIES: readonly Family[] = ['evm', 'tron']
 const SECRETS_DIR = './secrets'
-const SIGNERS_FILE = './data/signers.json'
 const GPG = process.env.GPG_BINARY ?? 'gpg'
 
 const secretPath = (family: Family): string => `${SECRETS_DIR}/${family}.key.gpg`
+const addressFile = (family: Family): string => `${SECRETS_DIR}/${family}.address`
 
-interface SignerEntry {
-  address?: string
-  chainType?: string
-  unlock?: string
-  source?: string
+/** 声明地址存在密钥旁边（secrets/<链族>.address），不再有 signers.json */
+async function readDeclaredAddress(family: Family): Promise<string | null> {
+  try {
+    return (await readFile(addressFile(family), 'utf8')).trim() || null
+  } catch {
+    return null
+  }
 }
 
 /* ══ 隐藏输入 ══════════════════════════════════════════════════════════ */
@@ -282,7 +285,15 @@ async function cmdEncrypt(): Promise<void> {
       await mkdir(dirname(target), { recursive: true })
       await writeFile(target, result.stdout, { mode: 0o600 })
       await chmod(target, 0o600)
-      console.log(`\n✅ 已写入 ${target}（权限 0600，解锁方式 ${method}）`)
+      console.log(`\n✅ 已写入 ${target}（权限 0600）`)
+
+      /**
+       * 地址写在密钥旁边。后端解密后会派生地址与它比对，不一致就拒绝 ——
+       * 这是「密钥文件被掉包」的检测点。由这里顺手写出，没有人工填写的环节，
+       * 也就不存在填错或忘填。
+       */
+      await writeFile(addressFile(family), `${address}\n`, 'utf8')
+      console.log(`✅ 已写入 ${addressFile(family)}：${address}`)
     } finally {
       plaintext.fill(0)
     }
@@ -291,7 +302,6 @@ async function cmdEncrypt(): Promise<void> {
     secretAgain?.fill(0)
   }
 
-  await offerUpdate(family, address, method)
 }
 
 /* ══ verify ════════════════════════════════════════════════════════════ */
@@ -306,8 +316,8 @@ async function cmdVerify(): Promise<void> {
     return
   }
 
-  const signer = await readSigner(family)
-  const method = (signer?.unlock as UnlockMethod) ?? UnlockMethod.PASSPHRASE
+  // 解锁方式是探出来的（看密钥文件本身 + 卡在不在），不用配
+  const method = await detectUnlock(family)
   const needsTouch = needsTouchOf(method)
   const secretLabel = labelOf(method)
 
@@ -344,14 +354,15 @@ async function cmdVerify(): Promise<void> {
   console.log('\n✅ 解密成功')
   console.log(`   派生地址:       ${address}`)
 
-  if (!signer?.address) {
-    console.log(`   ⚠️  operators.json 里没有 chainType="${family}" 的 signer 条目`)
+  const declared = await readDeclaredAddress(family)
+  if (!declared) {
+    console.log(`   ⚠️  缺少 ${addressFile(family)}，无法核对。重跑 keys encrypt 可生成`)
     process.exitCode = 1
     return
   }
 
-  const matched = signer.address.toLowerCase() === address.toLowerCase()
-  console.log(`   signers.json: ${signer.address}`)
+  const matched = declared.toLowerCase() === address.toLowerCase()
+  console.log(`   ${addressFile(family)}: ${declared}`)
   console.log(matched ? '   ✅ 地址一致' : '   ❌ 地址不一致！后端会拒绝使用该密钥')
   if (!matched) process.exitCode = 1
 }
@@ -382,7 +393,7 @@ async function cmdStatus(): Promise<void> {
   for (const family of FAMILIES) {
     const target = secretPath(family)
     const info = await stat(target).catch(() => null)
-    const signer = await readSigner(family)
+    const declared = await readDeclaredAddress(family)
 
     if (!info) {
       console.log(`  ${family.padEnd(5)} ❌ 未配置   (${target})`)
@@ -393,8 +404,8 @@ async function cmdStatus(): Promise<void> {
     console.log(
       `  ${family.padEnd(5)} ✅ 已配置   ${info.size} 字节  ${info.mtime.toISOString().slice(0, 19)}${warn}`,
     )
-    console.log(`        解锁方式: ${signer?.unlock ?? 'passphrase'}`)
-    console.log(`        声明地址: ${signer?.address ?? '(缺失)'}`)
+    console.log(`        解锁方式: ${await detectUnlock(family)}（探测得出）`)
+    console.log(`        声明地址: ${declared ?? '(缺失，重跑 keys encrypt 生成)'}`)
   }
   console.log('\n提示：status 不解密。用 keys verify 做完整校验。\n')
 }
@@ -410,15 +421,16 @@ async function pickFamily(): Promise<Family> {
   return answer as Family
 }
 
-async function pickUnlock(family: Family): Promise<UnlockMethod> {
-  const current = (await readSigner(family))?.unlock
-  const answer = (
-    await promptVisible(`\n解锁方式 (passphrase / yubikey)${current ? ` [当前: ${current}]` : ''}: `)
-  )
+/**
+ * 加密时问一次：对称加密（口令），还是加密给 YubiKey 上的公钥。
+ * 之后不用再记 —— 解锁时看文件本身就知道，见 detectUnlock。
+ */
+async function pickUnlock(_family: Family): Promise<UnlockMethod> {
+  const answer = (await promptVisible('\n解锁方式 (passphrase / yubikey) [默认 passphrase]: '))
     .trim()
     .toLowerCase()
 
-  if (answer === '') return (current as UnlockMethod) ?? UnlockMethod.PASSPHRASE
+  if (answer === '') return UnlockMethod.PASSPHRASE
   if (answer !== UnlockMethod.PASSPHRASE && answer !== UnlockMethod.YUBIKEY) {
     throw new Error(`无效的解锁方式: ${answer}`)
   }
@@ -427,37 +439,6 @@ async function pickUnlock(family: Family): Promise<UnlockMethod> {
 
 const exists = (path: string): Promise<boolean> =>
   stat(path).then(() => true).catch(() => false)
-
-/** signer 就是 operators.json 里 role='signer' 且 chainType 匹配的那条 */
-/** signer 在 data/signers.json 里，按链族一条 */
-async function readSigner(family: Family): Promise<SignerEntry | null> {
-  try {
-    const list = JSON.parse(await readFile(SIGNERS_FILE, 'utf8')) as SignerEntry[]
-    return list.find((s) => s.chainType === family) ?? null
-  } catch {
-    return null
-  }
-}
-
-/** 加密后主动提示更新配置，避免"密钥换了但配置没改"导致后端拒绝 */
-async function offerUpdate(family: Family, address: string, method: UnlockMethod): Promise<void> {
-  const signer = await readSigner(family)
-  if (signer?.address?.toLowerCase() === address.toLowerCase() && signer.unlock === method) {
-    return console.log('   signers.json 已是最新，无需修改。')
-  }
-
-  console.log(`\n下一步：把 ${SIGNERS_FILE} 中 chainType="${family}" 的条目改为：`)
-  console.log(`   address: ${address}`)
-  console.log(`   unlock:  ${method}`)
-  if (signer?.address) console.log(`   （当前 address 是 ${signer.address}）`)
-
-  if (!(await confirm('要我自动改吗？'))) return
-
-  const list = JSON.parse(await readFile(SIGNERS_FILE, 'utf8')) as SignerEntry[]
-  const next = list.map((s) => (s.chainType === family ? { ...s, address, unlock: method } : s))
-  await writeFile(SIGNERS_FILE, `${JSON.stringify(next, null, 2)}\n`, 'utf8')
-  console.log(`✅ 已更新 ${SIGNERS_FILE}`)
-}
 
 const firstLine = (text: string): string =>
   text.split('\n').find((line) => line.trim() !== '') ?? 'unknown'
@@ -472,8 +453,8 @@ const firstLine = (text: string): string =>
  */
 async function cmdDoctor(): Promise<void> {
   const family = await pickFamily()
-  const signer = await readSigner(family)
-  const method = (signer?.unlock as UnlockMethod) ?? UnlockMethod.PASSPHRASE
+  // 解锁方式是探出来的（看密钥文件本身 + 卡在不在），不用配
+  const method = await detectUnlock(family)
   const needsTouch = needsTouchOf(method)
   const secretLabel = labelOf(method)
 
@@ -584,13 +565,14 @@ async function cmdDoctor(): Promise<void> {
   })
 
   // ⑦ 地址比对
-  await step('地址与配置一致', async () => {
+  await step('地址与声明一致', async () => {
     if (!derived) throw new Error('跳过（上一步没解开）')
-    if (!signer?.address) throw new Error(`signers.json 里没有 chainType="${family}" 的条目`)
-    if (signer.address.toLowerCase() !== derived.toLowerCase()) {
-      throw new Error(`不一致！配置写的是 ${signer.address}`)
+    const declared = await readDeclaredAddress(family)
+    if (!declared) throw new Error(`缺少 ${addressFile(family)}，重跑 keys encrypt 可生成`)
+    if (declared.toLowerCase() !== derived.toLowerCase()) {
+      throw new Error(`不一致！${addressFile(family)} 里写的是 ${declared}`)
     }
-    return signer.address
+    return declared
   })
 
   console.log(

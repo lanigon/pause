@@ -3,7 +3,7 @@ import { ref } from 'vue'
 import { useCatalog } from './catalog'
 import { useExecution } from './execution'
 import { useSession } from './session'
-import type { ChainFamily } from '../types'
+import type { WalletAdapter } from '../chain/wallet'
 
 /**
  * 唯一的 store，由三块组合而成：
@@ -18,14 +18,14 @@ import type { ChainFamily } from '../types'
 export const useStore = defineStore('operator', () => {
   const session = useSession()
   const catalog = useCatalog(session)
-  const execution = useExecution(catalog)
+  const execution = useExecution(catalog, session)
 
   const error = ref<string | null>(null)
 
-  async function connect(family: ChainFamily): Promise<void> {
+  async function connect(wallet: WalletAdapter): Promise<void> {
     error.value = null
     // 只有 EVM 会真的登录；登录成功了才去拉数据
-    if (await session.connect(family, disconnect)) await catalog.bootstrap()
+    if (await session.connect(wallet, disconnect)) await catalog.bootstrap()
   }
 
   /** 退出：反向拆 —— 先停执行，再清数据，最后清身份 */

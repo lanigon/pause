@@ -1,6 +1,6 @@
 import { ref } from 'vue'
 import * as api from './api'
-import { walletFor, type WalletAdapter } from '../chain/wallet'
+import type { WalletAdapter } from '../chain/wallet'
 import type { ChainFamily, Operator, SignMode } from '../types'
 
 /**
@@ -12,16 +12,21 @@ import type { ChainFamily, Operator, SignMode } from '../types'
 export function useSession() {
   const operator = ref<Operator | null>(null)
   const connected = ref<Record<ChainFamily, string | null>>({ evm: null, tron: null })
+  /**
+   * 每个链族当前用的是哪个钱包。
+   * 必须记住 —— 用户装了多个钱包时，发交易要用他连的那个，
+   * 不能回头再去猜 window.ethereum 现在是谁。
+   */
+  const wallets = ref<Record<ChainFamily, WalletAdapter | null>>({ evm: null, tron: null })
   /** 签名模式：tab 切的就是这个 */
   const mode = ref<SignMode>('gpg')
 
   /** 返回 true 表示这次连接完成了登录，调用方该去加载数据了 */
-  async function connect(family: ChainFamily, onDisconnect: () => void): Promise<boolean> {
-    const wallet: WalletAdapter = walletFor(family)
-    if (!wallet.isInstalled()) throw new Error(`未检测到${wallet.label}，请先安装`)
-
+  async function connect(wallet: WalletAdapter, onDisconnect: () => void): Promise<boolean> {
+    const family = wallet.family
     const address = await wallet.connect()
     connected.value = { ...connected.value, [family]: address }
+    wallets.value = { ...wallets.value, [family]: wallet }
 
     wallet.onAccountChange((next) => {
       connected.value = { ...connected.value, [family]: next }
@@ -45,9 +50,10 @@ export function useSession() {
     api.setToken(null)
     operator.value = null
     connected.value = { evm: null, tron: null }
+    wallets.value = { evm: null, tron: null }
   }
 
-  return { operator, connected, mode, connect, resetSession }
+  return { operator, connected, wallets, mode, connect, resetSession }
 }
 
 export type Session = ReturnType<typeof useSession>

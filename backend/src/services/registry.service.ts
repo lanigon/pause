@@ -1,8 +1,7 @@
 import { loadRawConfig, type RawConfigBundle } from '../repositories/config.repository.js'
-import { assertRegistered, meta, resetAll, type ChainFamily } from '../lib/web3/index.js'
+import { assertRegistered, meta, resetAll } from '../lib/web3/index.js'
 import type { Chain } from '../models/chain.model.js'
 import type { BusinessLine, ContractDef } from '../models/contract.model.js'
-import type { SignerDef } from '../models/signer.model.js'
 import type { Operator } from '../models/operator.model.js'
 import { listOperations } from '../executor/operations.js'
 import { AppError, ErrorCode, notFound } from '../lib/utils/errors.js'
@@ -22,7 +21,6 @@ interface RegistryDto {
   readonly businessLines: readonly BusinessLine[]
   readonly chains: readonly (Chain & { rpcs: readonly string[] })[]
   readonly contracts: readonly ContractDef[]
-  readonly signers: readonly SignerDef[]
   readonly operations: readonly unknown[]
 }
 
@@ -32,8 +30,6 @@ export interface Registry {
   readonly chains: ReadonlyMap<string, Chain>
   readonly businessLines: readonly BusinessLine[]
   readonly contracts: ReadonlyMap<string, ContractDef>
-  /** 按链族索引：一个链族一把密钥 */
-  readonly signers: ReadonlyMap<ChainFamily, SignerDef>
   readonly operators: ReadonlyMap<string, Operator>
   readonly byBusinessLine: ReadonlyMap<string, readonly ContractDef[]>
 }
@@ -63,7 +59,6 @@ export async function loadRegistry(configDir?: string): Promise<Registry> {
       chains: next.chains.size,
       contracts: next.contracts.size,
       businessLines: next.businessLines.length,
-      signers: next.signers.size,
       operators: next.operators.size,
     },
     '配置已加载',
@@ -99,18 +94,6 @@ function build(raw: RawConfigBundle): Registry {
     }
   }
 
-  // 一个链族一把密钥。授权范围不在这里配 —— 由登录的人的 businessLines 决定
-  const signers = new Map<ChainFamily, SignerDef>()
-  for (const signer of raw.signers) {
-    const where = `signer ${signer.chainType}`
-    if (signers.has(signer.chainType)) problems.push(`${where}: 同一链族只能配一把密钥`)
-    signers.set(signer.chainType, signer)
-
-    if (!meta(signer.chainType).isValidAddress(signer.address)) {
-      problems.push(`${where}: 地址 "${signer.address}" 不符合 ${signer.chainType} 链的格式`)
-    }
-  }
-
   if (problems.length > 0) {
     throw new AppError(
       ErrorCode.INTERNAL,
@@ -124,7 +107,6 @@ function build(raw: RawConfigBundle): Registry {
     chains,
     businessLines: raw.businessLines,
     contracts,
-    signers,
     operators: indexOperators(raw.operators),
     byBusinessLine: groupBy(raw.contracts, (c) => c.businessLine),
   }
@@ -142,12 +124,6 @@ export function getContract(contractId: string): ContractDef {
   const contract = getRegistry().contracts.get(contractId)
   if (!contract) throw notFound(`合约不存在: ${contractId}`)
   return contract
-}
-
-export function getSigner(chainType: ChainFamily): SignerDef {
-  const signer = getRegistry().signers.get(chainType)
-  if (!signer) throw notFound(`未配置 ${chainType} 链族的后端签名密钥`)
-  return signer
 }
 
 export const findOperator = (normalizedAddress: string): Operator | undefined =>
@@ -187,7 +163,6 @@ export function dto(): RegistryDto {
     businessLines: registry.businessLines,
     chains,
     contracts,
-    signers: [...registry.signers.values()],
     operations: listOperations(),
   })
   return cachedDto

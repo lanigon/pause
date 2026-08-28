@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { loadRegistry, getChain, getContract, getSigner, findOperator, contractsOf, dto } from '../src/services/registry.service.js'
+import { loadRegistry, getChain, getContract, findOperator, contractsOf, dto } from '../src/services/registry.service.js'
 import { rpcProvider } from '../src/lib/rpc/rpcProvider.js'
 
 /**
@@ -29,7 +29,6 @@ const base = {
     contracts: [{ id: 'vault', name: 'Vault', businessLine: 'payment', chain: 'morph', address: EVM_ADDR }],
   },
   operators: [{ address: EVM_ADDR2, label: 'Alice', role: 'admin', enabled: true }],
-  signers: [{ chainType: 'evm', address: EVM_ADDR, unlock: 'passphrase' }],
 }
 
 async function write(over: Partial<typeof base> = {}) {
@@ -37,7 +36,6 @@ async function write(over: Partial<typeof base> = {}) {
   await writeFile(join(dir, 'chains.json'), JSON.stringify(merged.chains), 'utf8')
   await writeFile(join(dir, 'contracts.json'), JSON.stringify(merged.contracts), 'utf8')
   await writeFile(join(dir, 'operators.json'), JSON.stringify(merged.operators), 'utf8')
-  await writeFile(join(dir, 'signers.json'), JSON.stringify(merged.signers), 'utf8')
   await writeFile(join(dir, 'rpc.json'), JSON.stringify({ syncedAt: '', lark: {}, chainlist: { morph: ['https://m'], tron: ['https://t'] } }), 'utf8')
   // rpc.json 写完才加载，否则 provider 读到的是空的
   await rpcProvider.load(dir, '')
@@ -57,7 +55,6 @@ describe('正常加载', () => {
 
     expect(getChain('morph').chainId).toBe(2818)
     expect(getContract('vault').name).toBe('Vault')
-    expect(getSigner('evm').address).toBe(EVM_ADDR)
     expect(findOperator(EVM_ADDR2)?.label).toBe('Alice')
     expect(contractsOf('payment')).toHaveLength(1)
   })
@@ -112,21 +109,6 @@ describe('★ 跨文件引用校验', () => {
       },
     })
     await expect(loadRegistry(dir)).rejects.toThrow(/id 重复/)
-  })
-
-  it('同一链族配了两把密钥 → 启动失败', async () => {
-    await write({
-      signers: [
-        { chainType: 'evm', address: EVM_ADDR, unlock: 'passphrase' },
-        { chainType: 'evm', address: EVM_ADDR2, unlock: 'passphrase' },
-      ],
-    })
-    await expect(loadRegistry(dir)).rejects.toThrow(/只能配一把密钥/)
-  })
-
-  it('signer 地址格式与链族不符 → 启动失败', async () => {
-    await write({ signers: [{ chainType: 'evm', address: TRON_ADDR, unlock: 'passphrase' }] })
-    await expect(loadRegistry(dir)).rejects.toThrow(/不符合 evm 链的格式/)
   })
 
   it('★ 未注册的链族 → 启动失败（而不是运行时才发现没 adapter）', async () => {

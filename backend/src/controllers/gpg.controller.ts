@@ -32,7 +32,7 @@ export async function postBatch(req: Request, res: Response): Promise<void> {
   const body = req.body as z.infer<typeof batchSchema>
 
   // ① 授权校验。不过就走正常的 JSON 错误响应，还没进 SSE
-  const batch = plan({
+  const batch = await plan({
     operation: body.operation,
     contractIds: body.contractIds,
     actor: currentOperator(req),

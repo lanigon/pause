@@ -5,10 +5,8 @@ import {
   chainsFileSchema,
   contractsFileSchema,
   operatorsFileSchema,
-  signersFileSchema,
 } from '../config/config.schema.js'
 import type { BusinessLine, ContractDef } from '../models/contract.model.js'
-import type { SignerDef } from '../models/signer.model.js'
 import type { Chain } from '../models/chain.model.js'
 import type { Operator } from '../models/operator.model.js'
 import { readText, fileExists } from '../lib/utils/jsonFile.js'
@@ -22,7 +20,6 @@ import { AppError, ErrorCode } from '../lib/utils/errors.js'
  *   chains.json     RPC 数据
  *   contracts.json  合约数据（业务线也在里面）
  *   operators.json  登录身份（谁能登录）
- *   signers.json    后端签名密钥声明（不是登录身份）
  */
 
 interface ZodLike {
@@ -38,7 +35,6 @@ export interface RawConfigBundle {
   readonly businessLines: readonly BusinessLine[]
   readonly contracts: readonly ContractDef[]
   readonly operators: readonly Operator[]
-  readonly signers: readonly SignerDef[]
   readonly configVersion: string
 }
 
@@ -98,7 +94,6 @@ export async function loadRawConfig(configDir: string = env.DATA_DIR): Promise<R
   const chainsFile = await readConfigFile(dir, 'chains.json')
   const contractsFile = await readConfigFile(dir, 'contracts.json')
   const operatorsFile = await readConfigFile(dir, 'operators.json')
-  const signersFile = await readConfigFile(dir, 'signers.json')
 
   const chains = validate<{ chains: Chain[] }>('chains.json', chainsFileSchema, chainsFile.resolved)
   const contracts = validate<{ businessLines: BusinessLine[]; contracts: ContractDef[] }>(
@@ -107,15 +102,13 @@ export async function loadRawConfig(configDir: string = env.DATA_DIR): Promise<R
     contractsFile.resolved,
   )
   const operators = validate<Operator[]>('operators.json', operatorsFileSchema, operatorsFile.resolved)
-  const signers = validate<SignerDef[]>('signers.json', signersFileSchema, signersFile.resolved)
 
   return {
     chains: chains.chains,
     businessLines: contracts.businessLines,
     contracts: contracts.contracts,
     operators,
-    signers,
     // 用解析前的原文算指纹：环境变量值不参与，免得把私有 RPC 混进语义
-    configVersion: configVersionOf(chainsFile.raw, contractsFile.raw, operatorsFile.raw, signersFile.raw),
+    configVersion: configVersionOf(chainsFile.raw, contractsFile.raw, operatorsFile.raw),
   }
 }

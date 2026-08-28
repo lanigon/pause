@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { env } from '../../config/env.js'
 import type { ChainFamily } from '../web3/types.js'
 import type { SignPayloadFn, UnsignedPayload } from '../web3/index.js'
-import type { UnlockMethod } from '../../models/signer.model.js'
+import { detectUnlock, type UnlockMethod } from './gpg.js'
 import { providerOf } from './provider.js'
 import type {
   WorkerInit,
@@ -216,16 +216,17 @@ class SessionController {
  * 不需要设备的（本地口令文件）可以并发，省时间。
  */
 export async function openSessions(
-  targets: readonly {
-    family: ChainFamily
-    expectedAddress: string
-    unlock: UnlockMethod
-  }[],
+  targets: readonly { family: ChainFamily; expectedAddress: string }[],
   onAwaitingTouch?: (family: ChainFamily, label: string) => void,
 ): Promise<ReadonlyMap<ChainFamily, SigningSession>> {
   const sessions = new Map<ChainFamily, SigningSession>()
 
-  const open = async (target: (typeof targets)[number]): Promise<void> => {
+  // 解锁方式是探出来的（看密钥文件 + 卡在不在），不是配的
+  const resolved = await Promise.all(
+    targets.map(async (target) => ({ ...target, unlock: await detectUnlock(target.family) })),
+  )
+
+  const open = async (target: (typeof resolved)[number]): Promise<void> => {
     const session = await openSigningSession({
       ...target,
       onAwaitingTouch: onAwaitingTouch ? (label) => onAwaitingTouch(target.family, label) : undefined,
@@ -234,8 +235,8 @@ export async function openSessions(
   }
 
   try {
-    const exclusive = targets.filter((t) => needsExclusiveDevice(t))
-    const concurrent = targets.filter((t) => !needsExclusiveDevice(t))
+    const exclusive = resolved.filter((t) => needsExclusiveDevice(t))
+    const concurrent = resolved.filter((t) => !needsExclusiveDevice(t))
 
     // 独占设备的一个一个来 —— 同一张卡同时只能被一个进程访问
     for (const target of exclusive) await open(target)

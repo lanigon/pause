@@ -4,7 +4,6 @@ import { env } from '../../config/env.js'
 import { fileExists } from '../utils/jsonFile.js'
 import { KeyError, type KeyContext, type KeyProvider } from './provider.js'
 import { LOW_PIN_RETRIES, parseCardStatus, type CardStatus } from './card.js'
-import { UnlockMethod } from '../../models/signer.model.js'
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
@@ -27,6 +26,24 @@ import { UnlockMethod } from '../../models/signer.model.js'
  * 这也正是 YubiKey 本来的工作方式：插卡 → 输 PIN → 按一下。
  */
 /** 要人触摸的解锁方式，超时得给足 */
+/**
+ * 解锁方式。**不再是配置项，而是探出来的**。
+ *
+ * 以前在 signers.json 里手填，填错了不会报错只会行为怪异 ——
+ * 现在直接看密钥文件本身（gpg --list-packets，不需要口令）加上卡在不在：
+ *
+ *   对称加密                    → 口令
+ *   加密给公钥 + 卡在且有解密密钥 → YubiKey（要触摸、要独占、超时给足）
+ *   加密给公钥 + 卡不在          → 口令（密钥在钥匙环里，gpg-agent 会问它的口令）
+ *
+ * 最后一条是配置做不到的：配置写死 yubikey 的话，卡拔了照样按 YubiKey 处理，
+ * 白等 120 秒还提示用户去摸一个不存在的设备。
+ */
+export enum UnlockMethod {
+  PASSPHRASE = 'passphrase',
+  YUBIKEY = 'yubikey',
+}
+
 const TIMEOUT_MS: Readonly<Record<UnlockMethod, number>> = {
   [UnlockMethod.PASSPHRASE]: 60_000,
   [UnlockMethod.YUBIKEY]: 120_000,
@@ -50,6 +67,28 @@ export const secretExists = (family: string): Promise<boolean> => fileExists(sec
 
 const unlockOf = (context: KeyContext): UnlockMethod =>
   (context.options.unlock as UnlockMethod | undefined) ?? UnlockMethod.PASSPHRASE
+
+/** 密钥文件的加密形式只跟文件有关，探一次记住 */
+const encryptionForm = new Map<string, 'symmetric' | 'asymmetric'>()
+
+/** 探测某个链族的密钥怎么解锁。不需要口令 */
+export async function detectUnlock(family: string): Promise<UnlockMethod> {
+  const file = secretPathFor(family)
+
+  let form = encryptionForm.get(file)
+  if (!form) {
+    const packets = (await run(['--list-packets', file], 8_000)) ?? ''
+    // 对称加密的文件里是 symkey enc packet，加密给公钥的是 pubkey enc packet
+    form = packets.includes('symkey enc packet') ? 'symmetric' : 'asymmetric'
+    encryptionForm.set(file, form)
+  }
+
+  if (form === 'symmetric') return UnlockMethod.PASSPHRASE
+
+  // 加密给公钥：只有密钥真在卡上、卡也插着，才是 YubiKey 流程
+  const card = await readCardStatus().catch(() => ({ present: false, hasDecryptKey: false }))
+  return card.present && card.hasDecryptKey ? UnlockMethod.YUBIKEY : UnlockMethod.PASSPHRASE
+}
 
 const isCard = (context: KeyContext): boolean => unlockOf(context) === UnlockMethod.YUBIKEY
 

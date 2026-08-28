@@ -6,8 +6,8 @@ import {
   isCardBlocked,
   isPinentryUnavailable,
   remainingPinAttempts,
+  UnlockMethod,
 } from '../src/lib/keys/gpg.js'
-import { UnlockMethod } from '../src/models/signer.model.js'
 
 const ctx = (unlock: UnlockMethod) =>
   ({ family: 'evm', address: '0x0', options: { unlock } }) as never

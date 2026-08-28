@@ -1,7 +1,7 @@
 import { ref } from 'vue'
 import * as api from './api'
-import { walletFor } from '../chain/wallet'
 import type { Catalog } from './catalog'
+import type { Session } from './session'
 import type { ExecutionEvent, OperationKind } from '../types'
 
 /** 终态：拿到就不再被后续过程事件覆盖 */
@@ -11,7 +11,7 @@ const TERMINAL_PHASES = new Set(['confirmed', 'failed'])
  * 批量执行：GPG（后端签）与钱包（前端逐笔签）两条路。
  * 进度都归一到同一条事件流，弹窗只认 events。
  */
-export function useExecution(catalog: Catalog) {
+export function useExecution(catalog: Catalog, session: Session) {
   /** 本次执行的实时进度，来自 SSE。刷新页面即清空 */
   const events = ref<ExecutionEvent[]>([])
   /** 本次执行的失败原因（带错误码与建议），成功时为 null */
@@ -89,7 +89,9 @@ export function useExecution(catalog: Catalog) {
         const chain = catalog.chainOf(contract.chain)
         if (!chain) continue
         try {
-          const wallet = walletFor(chain.type)
+          // 用用户实际连的那个钱包，不猜 window.ethereum
+          const wallet = session.wallets.value[chain.type]
+          if (!wallet) throw new Error(`未连接 ${chain.type} 钱包`)
           const hash = await wallet.sendTransaction(chain, contract.address, operation)
           appendEvent({
             phase: 'broadcast',
