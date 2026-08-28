@@ -1,15 +1,26 @@
 import { describe, expect, it } from 'vitest'
-import { parseRows, toContracts, toRpcMap } from '../src/services/sync.service.js'
+import { parseRows, toContracts } from '../src/services/sync.service.js'
 import { field, type LarkRow } from '../src/lib/lark/client.js'
+import type { Chain } from '../src/models/chain.model.js'
 
 /**
  * Lark 表格解析。
  *
- * 表就一张，四列：业务线 · 链 · RPC · 合约。
- * 同一条链会在多行里重复（每个合约一行），所以聚合逻辑必须去重 ——
- * 否则 RPC 列表里会塞满重复项，合约也会重复出现。
+ * 表就一张，四列：**业务线 · 链 · chainId · 合约地址**。
+ *
+ * chainId 是链的真身份 —— B 列的「链」是给人看的标签，会写成各种样子，
+ * 定位到哪条链一律以 chainId 为准。解析不了的行跳过并报告，
+ * 不能拖垮整次同步（50 行错 1 行，另外 49 个合约照样该更新）。
  */
 const rows = (...list: LarkRow[]): LarkRow[] => list
+
+const CHAINS = [
+  { key: 'morph', name: 'Morph Mainnet', type: 'evm', chainId: 2818 },
+  { key: 'ethereum', name: 'Ethereum', type: 'evm', chainId: 1 },
+  { key: 'polygon', name: 'Polygon', type: 'evm', chainId: 137 },
+] as unknown as Chain[]
+
+const parse = (...list: LarkRow[]) => toContracts(parseRows(list), undefined, CHAINS)
 
 describe('表头容错', () => {
   it('大小写与首尾空格都不敏感', () => {
@@ -22,58 +33,94 @@ describe('表头容错', () => {
     expect(field({ 合约: '0xabc' }, 'contract', '合约')).toBe('0xabc')
   })
 
+  it('下划线、连字符、内部空格都不影响匹配', () => {
+    expect(field({ 'chain id': '1' }, 'chainId')).toBe('1')
+    expect(field({ chain_id: '1' }, 'chainId')).toBe('1')
+    expect(field({ 'Chain-ID': '1' }, 'chainId')).toBe('1')
+  })
+
+  it('一行里有多个别名时，按调用方给的优先级取', () => {
+    expect(field({ address: '0xB', 合约: '0xA' }, '合约', 'address')).toBe('0xA')
+    expect(field({ address: '0xB', 合约: '0xA' }, 'address', '合约')).toBe('0xB')
+  })
+
   it('取不到就返回空串，不抛错', () => {
     expect(field({ foo: 'bar' }, 'chain')).toBe('')
   })
 })
 
 describe('解析行', () => {
-  it('没有链的行直接丢掉', () => {
+  it('链名和 chainId 都没有的行直接丢掉', () => {
     const parsed = parseRows(rows({ 业务线: '支付', 合约: '0xabc' }, { 链: 'morph' }))
     expect(parsed).toHaveLength(1)
     expect(parsed[0]?.chain).toBe('morph')
   })
+
+  it('chainId 列认多种写法，并转成数字', () => {
+    expect(parseRows(rows({ chainId: '2818', 链: 'morph' }))[0]?.chainId).toBe(2818)
+    expect(parseRows(rows({ 'chain id': '2818', 链: 'morph' }))[0]?.chainId).toBe(2818)
+    expect(parseRows(rows({ 链id: '2818', 链: 'morph' }))[0]?.chainId).toBe(2818)
+  })
+
+  it('表格里的数字常带逗号或空格，要能吃掉', () => {
+    expect(parseRows(rows({ chainId: '728,126,428', 链: 'tron' }))[0]?.chainId).toBe(728126428)
+    expect(parseRows(rows({ chainId: ' 137 ', 链: 'polygon' }))[0]?.chainId).toBe(137)
+  })
+
+  it('chainId 不是正整数就当没填，退回按链名匹配', () => {
+    expect(parseRows(rows({ chainId: 'N/A', 链: 'morph' }))[0]?.chainId).toBeNull()
+    expect(parseRows(rows({ chainId: '0', 链: 'morph' }))[0]?.chainId).toBeNull()
+    expect(parseRows(rows({ chainId: '2.5', 链: 'morph' }))[0]?.chainId).toBeNull()
+  })
 })
 
-describe('聚合 RPC', () => {
-  it('同一条链的多个 RPC 合并，重复的去掉', () => {
-    const map = toRpcMap(
-      parseRows(
-        rows(
-          { 链: 'morph', RPC: 'https://a' },
-          { 链: 'morph', RPC: 'https://b' },
-          { 链: 'morph', RPC: 'https://a' }, // 重复
-          { 链: 'polygon', RPC: 'https://c' },
-        ),
-      ),
-    )
-    expect(map.morph).toEqual(['https://a', 'https://b'])
-    expect(map.polygon).toEqual(['https://c'])
+describe('按 chainId 定位链', () => {
+  it('★ chainId 说了算 —— B 列的链名写成什么样都不影响', () => {
+    // 「Morph 主网」不是 chains.json 里的 key 也不是 name，但 chainId 对
+    const { contracts } = parse({ 业务线: '支付', 链: 'Morph 主网', chainId: '2818', 合约: '0xa' })
+    expect(contracts[0]?.chain).toBe('morph')
   })
 
-  it('非 http 开头的一律不要（防止把备注文字当成 RPC）', () => {
-    const map = toRpcMap(parseRows(rows({ 链: 'morph', RPC: '待补充' }, { 链: 'morph', RPC: 'https://ok' })))
-    expect(map.morph).toEqual(['https://ok'])
+  it('★ chainId 在 chains.json 里没有时跳过该行，并说清要先补链定义', () => {
+    const { contracts, skipped } = parse({ 业务线: '支付', 链: 'Base', chainId: '8453', 合约: '0xa', 名称: 'Vault' })
+    expect(contracts).toHaveLength(0)
+    expect(skipped[0]).toContain('chainId 8453')
+    expect(skipped[0]).toContain('先补上链定义')
   })
 
-  it('保持出现顺序 —— 表里排在前面的就是优先级更高的', () => {
-    const map = toRpcMap(
-      parseRows(rows({ 链: 'x', RPC: 'https://1' }, { 链: 'x', RPC: 'https://2' }, { 链: 'x', RPC: 'https://3' })),
+  it('★ 一行坏不能拖垮其余的 —— 好行照常同步', () => {
+    const { contracts, skipped } = parse(
+      { 业务线: '支付', 链: 'morph', chainId: '2818', 合约: '0xa', 名称: 'A' },
+      { 业务线: '支付', 链: 'Base', chainId: '8453', 合约: '0xb', 名称: 'B' },
+      { 业务线: '支付', 链: 'ethereum', chainId: '1', 合约: '0xc', 名称: 'C' },
     )
-    expect(map.x).toEqual(['https://1', 'https://2', 'https://3'])
+    expect(contracts.map((c) => c.name)).toEqual(['A', 'C'])
+    expect(skipped).toHaveLength(1)
+  })
+
+  it('没填 chainId 时退回按链名匹配，key 和显示名都认', () => {
+    expect(parse({ 业务线: '支付', 链: 'morph', 合约: '0xa' }).contracts[0]?.chain).toBe('morph')
+    expect(parse({ 业务线: '支付', 链: 'Morph Mainnet', 合约: '0xa' }).contracts[0]?.chain).toBe('morph')
+  })
+
+  it('既没 chainId 也匹配不上链名时跳过，并说清两条路', () => {
+    const { skipped } = parse({ 业务线: '支付', 链: '某条新链', 合约: '0xa', 名称: 'X' })
+    expect(skipped[0]).toContain('没填 chainId')
+    expect(skipped[0]).toContain('某条新链')
+  })
+
+  it('跳过的行要指名道姓，否则运维不知道去改哪一行', () => {
+    const { skipped } = parse({ 业务线: '支付', 链: 'Base', chainId: '8453', 合约: '0xa', 名称: 'Bridge Vault' })
+    expect(skipped[0]).toContain('Bridge Vault')
   })
 })
 
 describe('聚合业务线与合约', () => {
   it('业务线去重，并生成 slug 作为 id', () => {
-    const { businessLines } = toContracts(
-      parseRows(
-        rows(
-          { 业务线: 'Payment', 链: 'morph', 合约: '0x1' },
-          { 业务线: 'Payment', 链: 'morph', 合约: '0x2' },
-          { 业务线: 'Bridge', 链: 'ethereum', 合约: '0x3' },
-        ),
-      ),
+    const { businessLines } = parse(
+      { 业务线: 'Payment', 链: 'morph', 合约: '0x1' },
+      { 业务线: 'Payment', 链: 'morph', 合约: '0x2' },
+      { 业务线: 'Bridge', 链: 'ethereum', 合约: '0x3' },
     )
     expect(businessLines).toEqual([
       { id: 'payment', name: 'Payment' },
@@ -81,41 +128,31 @@ describe('聚合业务线与合约', () => {
     ])
   })
 
-  it('★ 同一合约因多个 RPC 出现多行时，只保留一条', () => {
-    const { contracts } = toContracts(
-      parseRows(
-        rows(
-          { 业务线: '支付', 链: 'morph', RPC: 'https://a', 合约: '0xAbC', 名称: 'Vault' },
-          { 业务线: '支付', 链: 'morph', RPC: 'https://b', 合约: '0xabc', 名称: 'Vault' },
-        ),
-      ),
+  it('★ 同一合约重复出现时只保留一条，大小写不同也算同一个', () => {
+    const { contracts } = parse(
+      { 业务线: '支付', 链: 'morph', chainId: '2818', 合约: '0xAbC', 名称: 'Vault' },
+      { 业务线: '支付', 链: 'Morph 主网', chainId: '2818', 合约: '0xabc', 名称: 'Vault' },
     )
     expect(contracts).toHaveLength(1)
     expect(contracts[0]?.address).toBe('0xAbC')
   })
 
   it('不同链上的同地址算两个合约', () => {
-    const { contracts } = toContracts(
-      parseRows(
-        rows(
-          { 业务线: '支付', 链: 'morph', 合约: '0xsame', 名称: 'A' },
-          { 业务线: '支付', 链: 'polygon', 合约: '0xsame', 名称: 'A' },
-        ),
-      ),
+    const { contracts } = parse(
+      { 业务线: '支付', 链: 'morph', chainId: '2818', 合约: '0xsame', 名称: 'A' },
+      { 业务线: '支付', 链: 'polygon', chainId: '137', 合约: '0xsame', 名称: 'A' },
     )
     expect(contracts).toHaveLength(2)
   })
 
   it('没有合约地址的行只贡献业务线，不产出合约', () => {
-    const { businessLines, contracts } = toContracts(
-      parseRows(rows({ 业务线: '质押', 链: 'morph', RPC: 'https://a' })),
-    )
+    const { businessLines, contracts } = parse({ 业务线: '质押', 链: 'morph', chainId: '2818' })
     expect(businessLines).toHaveLength(0)
     expect(contracts).toHaveLength(0)
   })
 
   it('没写名称就用地址兜底', () => {
-    const { contracts } = toContracts(parseRows(rows({ 业务线: '支付', 链: 'morph', 合约: '0xdeadbeef' })))
+    const { contracts } = parse({ 业务线: '支付', 链: 'morph', 合约: '0xdeadbeef' })
     expect(contracts[0]?.name).toBe('0xdeadbeef')
   })
 })

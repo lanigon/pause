@@ -20,7 +20,7 @@ import { spawn } from 'node:child_process'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { config as loadDotenv } from 'dotenv'
 import { readTable } from '../src/lib/lark/client.js'
-import { parseRows, toContracts, toRpcMap } from '../src/services/sync.service.js'
+import { parseRows, toContracts } from '../src/services/sync.service.js'
 
 // 脚本独立运行，也要读 .env（ALCHEMY_API_KEY / LARK_URL）
 loadDotenv()
@@ -171,19 +171,20 @@ async function syncRpc(): Promise<void> {
   const chains = await readChains()
   console.log(`链定义: ${chains.map((c) => c.key).join(', ')}\n`)
 
-  // ① Lark（优先级最高）
-  let lark: Record<string, string[]> = {}
-  if (LARK_URL) {
-    try {
-      console.log('① 从 Lark 拉取…')
-      lark = toRpcMap(parseRows(await readTable(LARK_URL)))
-      console.log(`   拿到 ${count(lark)} 个，开始探活…`)
-      lark = await verifyAll(lark, chains, 'lark')
-    } catch (error) {
-      console.log(`   ⚠️  跳过 Lark：${(error as Error).message}\n`)
-    }
+  /**
+   * ① Lark 段：**不再自动同步**。
+   *
+   * 飞书那张表的 C 列现在是 chainId，不是 RPC —— RPC 另有出处（可能是一篇文档）。
+   * 所以这里原样保留 rpc.json 里已有的 lark 段（可以手工填），只重跑一次探活，
+   * 把已经死掉的摘出去。
+   */
+  const existing = await readRpcFile()
+  let lark = existing.lark ?? {}
+  if (count(lark) > 0) {
+    console.log(`① Lark 段：沿用 rpc.json 里已有的 ${count(lark)} 个，重新探活…`)
+    lark = await verifyAll(lark, chains, 'lark')
   } else {
-    console.log('① Lark：未设置 LARK_URL，跳过')
+    console.log('① Lark 段：rpc.json 里没有手工配置的 RPC，跳过')
   }
 
   // ② Alchemy 运行时按 chainId 现拼，不写进 rpc.json；但这里验一下 key 与网络是否可用
@@ -271,19 +272,42 @@ async function syncContracts(): Promise<void> {
   }
 
   console.log('从 Lark 拉取合约…')
-  const payload = toContracts(parseRows(await readTable(LARK_URL)))
+  // 链以 chainId 为准，所以要把 chains.json 传进去做解析
+  const chains = (await readChains()) as never
+  const local = await readContracts()
+  const payload = toContracts(parseRows(await readTable(LARK_URL)), local, chains)
+
+  for (const reason of payload.skipped) console.log(`   ⚠️  跳过 ${reason}`)
 
   if (payload.contracts.length === 0) {
-    throw new Error('Lark 表里没有解析出任何合约，请检查表头是否为 业务线/链/RPC/合约')
+    throw new Error('Lark 表里没有解析出任何合约，请检查表头是否为 业务线/链/chainId/合约')
   }
 
-  await writeFile(CONTRACTS_FILE, `${JSON.stringify(payload, null, 2)}\n`, 'utf8')
+  const output = { businessLines: payload.businessLines, contracts: payload.contracts }
+  await writeFile(CONTRACTS_FILE, `${JSON.stringify(output, null, 2)}\n`, 'utf8')
   console.log(
-    `✅ 已写入 ${CONTRACTS_FILE}：${payload.businessLines.length} 条业务线，${payload.contracts.length} 个合约`,
+    `✅ 已写入 ${CONTRACTS_FILE}：${payload.businessLines.length} 条业务线，${payload.contracts.length} 个合约` +
+      (payload.skipped.length ? `，跳过 ${payload.skipped.length} 行` : ''),
   )
 }
 
 /* ══ 辅助 ══════════════════════════════════════════════════════════════ */
+
+async function readContracts(): Promise<{ businessLines: never[]; contracts: never[] }> {
+  try {
+    return JSON.parse(await readFile(CONTRACTS_FILE, 'utf8')) as never
+  } catch {
+    return { businessLines: [], contracts: [] }
+  }
+}
+
+async function readRpcFile(): Promise<{ lark?: Record<string, string[]> }> {
+  try {
+    return JSON.parse(await readFile(RPC_FILE, 'utf8')) as { lark?: Record<string, string[]> }
+  } catch {
+    return {}
+  }
+}
 
 async function readChains(): Promise<ChainDef[]> {
   const parsed = JSON.parse(await readFile(CHAINS_FILE, 'utf8')) as { chains: ChainDef[] }
@@ -335,7 +359,7 @@ async function main(): Promise<void> {
   npm run sync all        |  pnpm sync all        两个都同步
 
 RPC 三级降级：Lark → Alchemy → ChainList
-  Lark       需要 lark CLI + 环境变量 LARK_URL（一张表：业务线/链/RPC/合约）
+  Lark       需要 lark CLI + 环境变量 LARK_URL（一张表：业务线/链/chainId/合约）
   Alchemy    只要 ALCHEMY_API_KEY，运行时现拼，不用同步
   ChainList  公开数据，直接可用
 `)

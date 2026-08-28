@@ -136,17 +136,25 @@ export async function readTable(
 }
 
 /**
- * 大小写与空格不敏感地取字段。
- * 飞书表头经常带空格、中英文混用，按名字精确匹配一定会漏。
+ * 取字段，表头写法不敏感。
+ *
+ * 飞书表头是人手打的：`chainId` / `chain id` / `chain_id` / `Chain-ID` 都会出现，
+ * 还常带首尾空格。按原样精确匹配一定会漏，而漏了的表现是"这列读不到"，
+ * 排查起来很费劲。所以两边都归一化：转小写 + 去掉空格、下划线、连字符。
  */
 export function field(row: LarkRow, ...names: readonly string[]): string {
+  const normalized = Object.entries(row).map(([key, value]) => [normalizeHeader(key), value] as const)
+
+  // 外层是别名 —— 一行里同时有「合约」和「address」时，按调用方给的顺序优先
   for (const name of names) {
-    for (const [key, value] of Object.entries(row)) {
-      if (key.trim().toLowerCase() === name.toLowerCase()) return String(value ?? '').trim()
-    }
+    const wanted = normalizeHeader(name)
+    const hit = normalized.find(([key]) => key === wanted)
+    if (hit) return String(hit[1] ?? '').trim()
   }
   return ''
 }
+
+const normalizeHeader = (text: string): string => text.toLowerCase().replace(/[\s_-]/g, '')
 
 export const hasCommand = (command: string): Promise<boolean> =>
   run('which', [command], 3_000)

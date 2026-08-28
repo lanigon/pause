@@ -37,7 +37,15 @@ vi.mock('../src/lib/lark/client.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/lib/lark/client.js')>()
   return { ...actual, readTable: (...args: unknown[]) => readTable(...args) }
 })
-vi.mock('../src/services/registry.service.js', () => ({ loadRegistry: () => loadRegistry() }))
+// 链以 chainId 为准，同步时要从 registry 拿 chains.json
+const CHAINS = [
+  { key: 'morph', name: 'Morph Mainnet', type: 'evm', chainId: 2818 },
+  { key: 'tron', name: 'Tron', type: 'tron', chainId: 728126428 },
+]
+vi.mock('../src/services/registry.service.js', () => ({
+  loadRegistry: () => loadRegistry(),
+  getRegistry: () => ({ chains: new Map(CHAINS.map((c) => [c.key, c])) }),
+}))
 vi.mock('../src/lib/rpc/rpcProvider.js', () => ({ rpcProvider: { load: async () => undefined } }))
 
 async function loadService() {
@@ -51,7 +59,7 @@ async function loadService() {
 const row = (over: Record<string, string> = {}) => ({
   业务线: '支付',
   链: 'morph',
-  RPC: 'https://rpc.morphl2.io',
+  chainId: '2818',
   合约: '0x' + '1'.repeat(40),
   名称: 'A',
   ...over,
@@ -104,7 +112,7 @@ describe('Lark 同步', () => {
 
   it('★ 配置校验不过要回滚 —— 磁盘上不能留下跑不起来的配置', async () => {
     const { syncFromLark } = await loadService()
-    readTable.mockResolvedValue([row({ 链: 'unknown-chain', 名称: 'B', 合约: '0x' + '2'.repeat(40) })])
+    readTable.mockResolvedValue([row({ 名称: 'B', 合约: '0x' + '2'.repeat(40) })])
     // 最常见的情况：Lark 上有 chains.json 里没有的链
     // 只失败第一次：回滚会再调一次，那次必须成功
     loadRegistry.mockRejectedValueOnce(new Error('引用了不存在的链 "unknown-chain"'))
@@ -118,11 +126,6 @@ describe('Lark 同步', () => {
   })
 
   it('内容一致时不写盘，也不重载配置', async () => {
-    // 合约和 RPC 都要和本地一致才算"没变"
-    await writeFile(
-      join(dataDir, 'rpc.json'),
-      JSON.stringify({ syncedAt: '', lark: { morph: ['https://rpc.morphl2.io'] }, chainlist: {} }),
-    )
     const { syncFromLark } = await loadService()
     readTable.mockResolvedValue([row()])
 
@@ -189,6 +192,27 @@ describe('Lark 同步', () => {
     const summary = events.flatMap((e) => e.changes ?? [])
     expect(summary.some((line) => line.includes('新增合约'))).toBe(false)
     expect(summary.some((line) => line.includes('归属或名称变更'))).toBe(true)
+  })
+
+  it('★ 表格里有 chains.json 没有的链时，跳过那几行、其余照常同步', async () => {
+    const { syncFromLark } = await loadService()
+    readTable.mockResolvedValue([
+      row(),
+      // Base（8453）不在 chains.json 里 —— 以前会写进去再整次回滚，一个合约都更新不了
+      row({ 链: 'Base', chainId: '8453', 名称: 'Base Vault', 合约: '0x' + '2'.repeat(40) }),
+      row({ 链: 'tron', chainId: '728126428', 名称: 'T', 合约: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t' }),
+    ])
+
+    const result = await syncFromLark(emit, true)
+
+    // 好行落盘了
+    expect(result.changed).toBe(true)
+    expect((await localContracts()).contracts.map((c) => c.name)).toEqual(['A', 'T'])
+
+    // 坏行必须报出来，指名道姓，绝不能悄悄跳过
+    const skip = events.find((e) => e.code === 'ROWS_SKIPPED')
+    expect(skip?.changes?.[0]).toContain('Base Vault')
+    expect(skip?.changes?.[0]).toContain('chainId 8453')
   })
 
   it('★ 并发请求共享同一次同步，不重复打 Lark', async () => {

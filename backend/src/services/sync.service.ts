@@ -5,10 +5,9 @@ import { KeyedMutex } from '../lib/utils/mutex.js'
 import { logger } from '../lib/utils/logger.js'
 import { env } from '../config/env.js'
 import { contractsFileSchema } from '../config/config.schema.js'
-import { loadRegistry } from './registry.service.js'
-import { rpcProvider } from '../lib/rpc/rpcProvider.js'
+import { getRegistry, loadRegistry } from './registry.service.js'
+import type { Chain } from '../models/chain.model.js'
 import type { BusinessLine, ContractDef } from '../models/contract.model.js'
-import type { RpcFile } from '../lib/rpc/types.js'
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
@@ -30,6 +29,11 @@ export interface ContractsPayload {
   readonly contracts: readonly ContractDef[]
 }
 
+/** 解析结果 = 内容 + 被跳过的行（每条一句人话，说清是哪一行、为什么） */
+export interface ContractsResult extends ContractsPayload {
+  readonly skipped: readonly string[]
+}
+
 
 /** 同步节流：这段时间内的重复请求直接用上次结果 */
 const SYNC_TTL_MS = 60_000
@@ -37,7 +41,9 @@ const SYNC_TTL_MS = 60_000
 const LARK_TIMEOUT_MS = 15_000
 
 const CONTRACTS_FILE = `${env.DATA_DIR}/contracts.json`
-const RPC_FILE = `${env.DATA_DIR}/rpc.json`
+
+// RPC 不再来自这张表（C 列现在是 chainId）。
+// 运行时的 RPC 来源见 lib/rpc：手工填的 rpc.json lark 段 → Alchemy → ChainList。
 
 /* ══ 事件 ════════════════════════════════════════════════════════════════ */
 
@@ -79,8 +85,11 @@ export interface SyncResult {
  */
 export interface LarkRecord {
   readonly businessLine: string
+  /** B 列：链的名字，给人看的标签 */
   readonly chain: string
-  readonly rpc: string
+  /** C 列：chainId —— 链的真身份，机器可校验，解析时以它为准 */
+  readonly chainId: number | null
+  /** D 列：合约地址 */
   readonly contract: string
   readonly contractName: string
 }
@@ -89,28 +98,28 @@ export function parseRows(rows: readonly LarkRow[]): readonly LarkRecord[] {
   return rows
     .map((row) => ({
       businessLine: field(row, 'business_line', 'businessLine', '业务线'),
-      chain: field(row, 'chain', '链', 'chainKey'),
-      rpc: field(row, 'rpc', 'RPC', 'RPC地址', 'url', 'endpoint'),
+      chain: field(row, 'chain', '链', 'chainKey', '链名'),
+      chainId: toChainId(field(row, 'chainid', 'chain_id', 'chainId', '链id', '链 id')),
       contract: field(row, 'contract', '合约', '合约地址', 'address', '地址'),
       contractName: field(row, 'name', '名称', '合约名'),
     }))
-    .filter((record) => record.chain !== '')
+    .filter((record) => record.chain !== '' || record.chainId !== null)
 }
 
-/** 链 → RPC 列表（去重，保持出现顺序） */
-export function toRpcMap(records: readonly LarkRecord[]): Record<string, string[]> {
-  const map: Record<string, string[]> = {}
-  for (const record of records) {
-    if (!record.rpc.startsWith('http')) continue
-    const list = (map[record.chain] ??= [])
-    if (!list.includes(record.rpc)) list.push(record.rpc)
-  }
-  return map
+/** 表格里的数字列可能带逗号或空格，也可能是空的 */
+function toChainId(raw: string): number | null {
+  const cleaned = raw.replace(/[,\s]/g, '')
+  if (!cleaned) return null
+  const parsed = Number(cleaned)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null
 }
-
 
 /**
  * 业务线 + 合约。
+ *
+ * **链以 chainId 为准**。表格 B 列的"链"是给人看的标签，会写成「Morph 主网」
+ * 「morph」「Morph Mainnet」各种样子；C 列的 chainId 才是机器可校验的真身份。
+ * 拿 chainId 去 chains.json 里查到哪条链，用那条链的 key。
  *
  * **id 沿用本地已有的**。Lark 是内容的真相来源，但 id 是本地的稳定标识：
  * 手工维护的可读 id（payment、morph-pausable-live）不该被同步冲成哈希，
@@ -118,11 +127,18 @@ export function toRpcMap(records: readonly LarkRecord[]): Record<string, string[
  *
  * 配对依据是**内在身份**，不是 id：
  *   业务线 → 名称        合约 → 链 + 地址（合约的真身份就是这个）
+ *
+ * 解析不了的行**跳过并报告**，不让它拖垮整次同步 ——
+ * 50 行里有 1 行填错，另外 49 个合约照样该更新。
  */
 export function toContracts(
   records: readonly LarkRecord[],
   local: ContractsPayload = { businessLines: [], contracts: [] },
-): ContractsPayload {
+  chains: readonly Chain[] = [],
+): ContractsResult {
+  const byChainId = new Map(chains.map((chain) => [chain.chainId, chain]))
+  const byKey = new Map(chains.map((chain) => [chain.key.toLowerCase(), chain]))
+
   const localLineIdByName = new Map(local.businessLines.map((line) => [line.name, line.id]))
   const localContractIdByAddress = new Map(
     local.contracts.map((contract) => [addressKey(contract.chain, contract.address), contract.id]),
@@ -130,16 +146,28 @@ export function toContracts(
 
   const lines = new Map<string, string>()
   const contracts: ContractDef[] = []
+  const skipped: string[] = []
   const seen = new Set<string>()
 
   for (const record of records) {
-    if (!record.businessLine || !record.contract) continue
+    const where = record.contractName || record.contract || '(无名行)'
+
+    if (!record.businessLine || !record.contract) {
+      if (record.contract || record.businessLine) skipped.push(`${where}：业务线或合约地址为空`)
+      continue
+    }
+
+    const chain = resolveChain(record, byChainId, byKey)
+    if (typeof chain === 'string') {
+      skipped.push(`${where}：${chain}`)
+      continue
+    }
 
     const lineId = localLineIdByName.get(record.businessLine) ?? slug(record.businessLine)
     lines.set(lineId, record.businessLine)
 
-    // 同一个合约可能因为多个 RPC 而出现多行，按 链+地址 去重
-    const key = addressKey(record.chain, record.contract)
+    // 同一个合约可能重复出现，按 链+地址 去重
+    const key = addressKey(chain.key, record.contract)
     if (seen.has(key)) continue
     seen.add(key)
 
@@ -147,10 +175,10 @@ export function toContracts(
       // 本地已有就沿用；新合约才生成。生成规则：链 + 地址前 8 位，改名不换 id
       id:
         localContractIdByAddress.get(key) ??
-        `${slug(record.chain)}-${record.contract.replace(/^0x/i, '').slice(0, 8).toLowerCase()}`,
+        `${slug(chain.key)}-${record.contract.replace(/^0x/i, '').slice(0, 8).toLowerCase()}`,
       name: record.contractName || record.contract,
       businessLine: lineId,
-      chain: record.chain,
+      chain: chain.key,
       address: record.contract,
     })
   }
@@ -158,7 +186,35 @@ export function toContracts(
   return {
     businessLines: [...lines].map(([id, name]) => ({ id, name })),
     contracts,
+    skipped,
   }
+}
+
+/**
+ * 把一行定位到某条链。解析不了就返回原因字符串。
+ *
+ * chainId 优先 —— 它是链的真身份。填了 chainId 但 chains.json 里没有，
+ * 说明要接一条新链，那得先补 chains.json（还要 explorer、类型、multicall
+ * 这些表格里没有的信息），不能凭一个数字就往紧急暂停的清单里加链。
+ */
+function resolveChain(
+  record: LarkRecord,
+  byChainId: ReadonlyMap<number, Chain>,
+  byKey: ReadonlyMap<string, Chain>,
+): Chain | string {
+  if (record.chainId !== null) {
+    const chain = byChainId.get(record.chainId)
+    if (!chain) {
+      return `chainId ${record.chainId} 在 chains.json 里没有对应的链，请先补上链定义`
+    }
+    return chain
+  }
+
+  // 没填 chainId 就退回按名字匹配 —— 认 key，也认 chains.json 里的显示名
+  const label = record.chain.trim().toLowerCase()
+  const chain = byKey.get(label) ?? [...byKey.values()].find((c) => c.name.toLowerCase() === label)
+  if (!chain) return `没填 chainId，链名「${record.chain}」也匹配不上 chains.json 里的任何一条链`
+  return chain
 }
 
 const addressKey = (chain: string, address: string): string => `${chain}:${address.toLowerCase()}`
@@ -239,23 +295,6 @@ export function diffContracts(local: ContractsPayload, next: ContractsPayload): 
   return changes
 }
 
-export function diffRpc(
-  local: Readonly<Record<string, readonly string[]>>,
-  next: Readonly<Record<string, readonly string[]>>,
-): readonly string[] {
-  const changes: string[] = []
-  for (const [chain, urls] of Object.entries(next)) {
-    const previous = local[chain] ?? []
-    if (previous.join('|') !== urls.join('|')) {
-      changes.push(`${chain} RPC ${previous.length} → ${urls.length} 个`)
-    }
-  }
-  for (const chain of Object.keys(local)) {
-    if (!(chain in next)) changes.push(`${chain} 移除了 Lark RPC`)
-  }
-  return changes
-}
-
 /* ══ 同步 ════════════════════════════════════════════════════════════════ */
 
 const lock = new KeyedMutex()
@@ -297,7 +336,7 @@ async function runSync(emit: SyncEmit): Promise<SyncResult> {
   }
 
   // ① 拉取。失败就降级到本地，绝不让前端拿不到数据
-  emit(event(SyncPhase.SOURCE, true, '正在从 Lark 拉取合约与 RPC…'))
+  emit(event(SyncPhase.SOURCE, true, '正在从 Lark 拉取合约清单…'))
   let records: readonly LarkRecord[]
   try {
     records = parseRows(await readTable(env.LARK_URL, LARK_TIMEOUT_MS))
@@ -313,7 +352,7 @@ async function runSync(emit: SyncEmit): Promise<SyncResult> {
     businessLines: [],
     contracts: [],
   })
-  const next = toContracts(records, localContracts)
+  const next = toContracts(records, localContracts, [...getRegistry().chains.values()])
   emit(
     event(
       SyncPhase.SOURCE,
@@ -321,6 +360,19 @@ async function runSync(emit: SyncEmit): Promise<SyncResult> {
       `拉到 ${records.length} 行，解析出 ${next.businessLines.length} 条业务线、${next.contracts.length} 个合约`,
     ),
   )
+
+  // 解析不了的行单独报出来 —— 跳过它们，但绝不能悄悄跳过
+  if (next.skipped.length > 0) {
+    emit(
+      event(
+        SyncPhase.SOURCE,
+        false,
+        `${next.skipped.length} 行解析不了，已跳过（其余照常同步）`,
+        'ROWS_SKIPPED',
+        next.skipped,
+      ),
+    )
+  }
 
   // ② 空数据 = 异常，绝不覆盖本地。这是最危险的失败模式：
   //    表格权限掉了 / 视图筛选错了，都会返回 0 行；覆盖下去紧急时就没合约可暂停了
@@ -336,11 +388,8 @@ async function runSync(emit: SyncEmit): Promise<SyncResult> {
     return { changed: false, fromLark: true }
   }
 
-  // ③ 比对
-  const localRpc = await readJson<RpcFile>(RPC_FILE, { syncedAt: '', lark: {}, chainlist: {} })
-  const nextRpc = toRpcMap(records)
-
-  const changes = [...diffContracts(localContracts, next), ...diffRpc(localRpc.lark, nextRpc)]
+  // ③ 比对。RPC 不在这张表里（C 列现在是 chainId），所以只比合约
+  const changes = diffContracts(localContracts, next)
 
   if (changes.length === 0) {
     emit(event(SyncPhase.DIFF, true, '与本地一致，无需更新'))
@@ -358,14 +407,11 @@ async function runSync(emit: SyncEmit): Promise<SyncResult> {
     return { changed: false, fromLark: true }
   }
 
-  const nextRpcFile: RpcFile = { ...localRpc, syncedAt: new Date().toISOString(), lark: nextRpc }
-
   try {
-    await writeJsonAtomic(CONTRACTS_FILE, next)
-    await writeJsonAtomic(RPC_FILE, nextRpcFile)
-
-    // 重载顺序：先 RPC 再 registry —— registry 的 DTO 里要带 RPC
-    await rpcProvider.load(env.DATA_DIR)
+    await writeJsonAtomic(CONTRACTS_FILE, {
+      businessLines: next.businessLines,
+      contracts: next.contracts,
+    })
     await loadRegistry()
 
     logger.info({ changes: changes.length }, 'Lark 同步已应用')
@@ -373,15 +419,16 @@ async function runSync(emit: SyncEmit): Promise<SyncResult> {
     return { changed: true, fromLark: true }
   } catch (error) {
     /**
-     * 写进去了但配置校验没过（最常见：Lark 上有 chains.json 里没有的链）。
+     * 写进去了但配置校验没过。
      *
-     * 必须回滚 —— 磁盘上留着一份跑不起来的配置，**下次重启后端就起不来了**。
-     * 紧急暂停工具起不来是最坏的结果，比数据旧得多。
+     * chainId 解析那一层已经挡掉了"链不存在"这类问题，走到这儿说明是
+     * 更意外的情况（地址格式、id 冲突…）。仍然必须回滚 ——
+     * 磁盘上留着一份跑不起来的配置，**下次重启后端就起不来了**。
      */
     const message = error instanceof Error ? error.message : String(error)
     logger.error({ message }, 'Lark 同步应用失败，正在回滚')
 
-    const rolledBack = await rollback(localContracts, localRpc)
+    const rolledBack = await rollback(localContracts)
     emit(
       event(
         SyncPhase.APPLY,
@@ -397,11 +444,9 @@ async function runSync(emit: SyncEmit): Promise<SyncResult> {
 }
 
 /** 把两个文件恢复到同步前的内容并重载。返回是否恢复成功 */
-async function rollback(contracts: ContractsPayload, rpc: RpcFile): Promise<boolean> {
+async function rollback(contracts: ContractsPayload): Promise<boolean> {
   try {
     await writeJsonAtomic(CONTRACTS_FILE, contracts)
-    await writeJsonAtomic(RPC_FILE, rpc)
-    await rpcProvider.load(env.DATA_DIR)
     await loadRegistry()
     return true
   } catch (cause) {
