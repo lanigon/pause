@@ -4,8 +4,19 @@ import type { Catalog } from './catalog'
 import type { Session } from './session'
 import type { ExecutionEvent, OperationKind } from '../types'
 
-/** 终态：拿到就不再被后续过程事件覆盖 */
-const TERMINAL_PHASES = new Set(['confirmed', 'failed'])
+/**
+ * 终态：拿到就清掉"进行中"标记。
+ *
+ * skip 也是终态 —— 漏了它的话，被跳过的合约会永久显示"已跳过"，
+ * 把真实的 paused 状态挡住，直到刷新页面。
+ */
+const TERMINAL_PHASES = new Set(['confirmed', 'failed', 'skip'])
+
+/** 一批跑完的结果，用来决定给用户看什么颜色的提示 */
+export interface BatchOutcome {
+  readonly ok: number
+  readonly failed: number
+}
 
 /**
  * 批量执行：GPG（后端签）与钱包（前端逐笔签）两条路。
@@ -27,7 +38,7 @@ export function useExecution(catalog: Catalog, session: Session) {
    * 一个请求做完：POST 过去，响应体就是 SSE 流，边收边更新。
    * **不传任何密钥材料** —— 后端本地解 GPG 文件，需要时调本机的 YubiKey。
    */
-  async function runGpgBatch(operation: OperationKind): Promise<void> {
+  async function runGpgBatch(operation: OperationKind): Promise<BatchOutcome> {
     const registry = catalog.registry.value
     if (!registry) throw new Error('配置未加载')
     const ids = catalog.selectedContracts.value.map((c) => c.id)
@@ -48,9 +59,16 @@ export function useExecution(catalog: Catalog, session: Session) {
     } finally {
       running.value = false
       abortController = null
+      clearPending(ids)
       // 无论成败都把链上状态和交易日志刷一遍
       await Promise.all([catalog.refreshStates(), catalog.reloadLogs()])
     }
+
+    // 成败以事件流为准 —— 后端把每个合约的终态都推过来了
+    const confirmed = new Set(
+      events.value.filter((e) => e.phase === 'confirmed' && e.contractId).map((e) => e.contractId),
+    )
+    return { ok: confirmed.size, failed: ids.length - confirmed.size }
   }
 
   /**
@@ -78,14 +96,27 @@ export function useExecution(catalog: Catalog, session: Session) {
     })
   }
 
+  /**
+   * 一批跑完后把「进行中」标记全部清干净。
+   *
+   * 事件流可能因为取消、连接断开而中途停下，那些合约会永远卡在"签名中"，
+   * 把真实状态挡住。所以不管怎么结束，都按参与本批的合约逐个清一遍。
+   */
+  function clearPending(contractIds: readonly string[]): void {
+    for (const id of contractIds) catalog.markContract(id, { pending: undefined })
+  }
+
   /* ── 钱包模式：逐笔签名 ── */
 
-  async function runWalletBatch(operation: OperationKind): Promise<void> {
+  async function runWalletBatch(operation: OperationKind): Promise<BatchOutcome> {
+    const targets = [...catalog.selectedContracts.value]
     running.value = true
     events.value = []
     failure.value = null
+    let ok = 0
+
     try {
-      for (const contract of catalog.selectedContracts.value) {
+      for (const contract of targets) {
         const chain = catalog.chainOf(contract.chain)
         if (!chain) continue
         try {
@@ -93,7 +124,9 @@ export function useExecution(catalog: Catalog, session: Session) {
           const wallet = session.wallets.value[chain.type]
           if (!wallet) throw new Error(`未连接 ${chain.type} 钱包`)
           const hash = await wallet.sendTransaction(chain, contract.address, operation)
-          appendEvent({
+          // 走 onEvent 而不是 appendEvent —— 顺带把哈希写进合约状态，
+          // 列表里的"交易"列才有东西可点
+          onEvent({
             phase: 'broadcast',
             at: Date.now(),
             contractId: contract.id,
@@ -101,6 +134,7 @@ export function useExecution(catalog: Catalog, session: Session) {
             message: `${contract.name}：已广播 ${hash.slice(0, 10)}…`,
             hash,
           })
+          ok += 1
           // 广播成功了才上报 —— 没发出去的不记
           await api.postLog({
             operation,
@@ -110,7 +144,7 @@ export function useExecution(catalog: Catalog, session: Session) {
             status: 'broadcast',
           })
         } catch (err) {
-          appendEvent({
+          onEvent({
             phase: 'failed',
             at: Date.now(),
             contractId: contract.id,
@@ -120,8 +154,10 @@ export function useExecution(catalog: Catalog, session: Session) {
         }
       }
       await Promise.all([catalog.refreshStates(), catalog.reloadLogs()])
+      return { ok, failed: targets.length - ok }
     } finally {
       running.value = false
+      clearPending(targets.map((c) => c.id))
     }
   }
 

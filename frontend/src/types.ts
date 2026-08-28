@@ -72,7 +72,6 @@ export interface Operator {
 /** 合约链上状态。前端自己 multicall 读出来的 */
 export interface ContractState {
   paused?: boolean
-  owner?: string
   /** 执行中的实时状态，来自 SSE */
   pending?: string
   hash?: string

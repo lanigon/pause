@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { OperationKind } from '../src/executor/operations.js'
+import { OperationKind } from '../src/services/operations.js'
 import { BatchItemStatus } from '../src/lib/web3/types.js'
 
 /**
@@ -50,7 +50,7 @@ vi.mock('../src/lib/web3/chains.js', async () => {
   }
 })
 
-const { execute, assertAuthorized, readStates } = await import('../src/executor/executor.js')
+const { execute, assertAuthorized, readStates } = await import('../src/services/execution.service.js')
 
 const signer = { chainType: 'evm', address: '0xSIGNER', unlock: 'passphrase' } as never
 const actor = { address: '0xALICE', label: 'Alice', role: 'admin' } as never
@@ -186,8 +186,6 @@ describe('★ 回归：预演失败不能谎报"预演通过"', () => {
       [{ id: 'x', request: { contractAddress: '0x1', fromAddress: '0x2', method: 'pause', args: [] } }],
       async () => ({}),
       {
-        nextSequence: () => 0,
-        commitSequence: () => undefined,
         simulate: async () => ({ ok: false, reason: 'REVERT' }),
         build: async () => ({ family: 'evm', payload: {} }),
         broadcast: async () => '0x',

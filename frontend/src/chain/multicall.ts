@@ -1,18 +1,14 @@
 import { Contract, Interface, JsonRpcProvider } from 'ethers'
+import { PAUSABLE_ABI } from './abi'
 import type { Chain, Contract as ContractDef, ContractState } from '../types'
 
 /**
  * 前端读链上状态。
  *
- * EVM 走 Multicall3：一条链上所有合约的 paused()/owner() 一次 RPC 读完，
+ * EVM 走 Multicall3：一条链上所有合约的 paused() 一次 RPC 读完，
  * 不占后端配额，切业务线时刷新很快。
  * Tron 没有 Multicall3，用受限并发替代（TronGrid 有 QPS 限制）。
  */
-const PAUSABLE_ABI = [
-  'function paused() view returns (bool)',
-  'function owner() view returns (address)',
-]
-
 const MULTICALL3_ABI = [
   'function aggregate3((address target, bool allowFailure, bytes callData)[] calls) view returns ((bool success, bytes returnData)[] returnData)',
 ]
@@ -28,9 +24,9 @@ const MULTICALL3 = '0xcA11bde05977b3631167028862bE2a173976CA11'
 const TRON_CONCURRENCY = 5
 
 /** 一次读：某个合约的某个字段 */
-type Call = { id: string; key: 'paused' | 'owner'; target: string }
+type Call = { id: string; key: 'paused'; target: string }
 
-const decode = (key: 'paused' | 'owner', data: string): unknown =>
+const decode = (key: 'paused', data: string): unknown =>
   iface.decodeFunctionResult(key, data)[0]
 
 /** 按链分组并行读。返回 contractId → 状态 */
@@ -51,7 +47,8 @@ export async function readStates(
       const chain = chainByKey.get(chainKey)
       if (!chain) return new Map<string, ContractState>()
       try {
-        return chain.type === 'tron' ? await readTron(chain, group) : await readEvm(chain, group)
+        // 没注册的链族返回空 —— 状态显示 Unknown，绝不拿 EVM 的逻辑去套一条异构链
+        return (await READERS[chain.type]?.(chain, group)) ?? new Map<string, ContractState>()
       } catch {
         // 单条链读失败不影响其它链，该链的合约状态留空（显示 Unknown）
         return new Map<string, ContractState>()
@@ -64,13 +61,22 @@ export async function readStates(
   return merged
 }
 
+/**
+ * 链族 → 怎么读它的合约状态。**加一条异构链就在这里加一行**。
+ */
+const READERS: Record<string, (chain: Chain, contracts: ContractDef[]) => Promise<Map<string, ContractState>>> = {
+  evm: (chain, contracts) => readEvm(chain, contracts),
+  tron: (chain, contracts) => readTron(chain, contracts),
+}
+
 async function readEvm(chain: Chain, contracts: ContractDef[]): Promise<Map<string, ContractState>> {
   const provider = new JsonRpcProvider(chain.rpcs[0], chain.chainId, { staticNetwork: true })
 
-  const calls = contracts.flatMap((contract) => [
-    { id: contract.id, key: 'paused' as const, target: contract.address },
-    { id: contract.id, key: 'owner' as const, target: contract.address },
-  ])
+  const calls = contracts.map((contract) => ({
+    id: contract.id,
+    key: 'paused' as const,
+    target: contract.address,
+  }))
 
   try {
     return await readViaMulticall(provider, calls)
@@ -80,10 +86,10 @@ async function readEvm(chain: Chain, contracts: ContractDef[]): Promise<Map<stri
   }
 }
 
-/** 收集结果：一个合约的两个字段合到同一条状态上 */
+/** 收集结果。解码失败就当没读到 —— 状态未知比状态错了安全 */
 function collect(states: Map<string, ContractState>, call: Call, data: string): void {
   try {
-    states.set(call.id, { ...(states.get(call.id) ?? {}), [call.key]: decode(call.key, data) })
+    states.set(call.id, { ...(states.get(call.id) ?? {}), paused: decode(call.key, data) === true })
   } catch {
     /* 解码失败就当读不到 */
   }

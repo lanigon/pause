@@ -19,7 +19,8 @@
     "test:cov": "vitest run --coverage",
     "lint": "eslint src",
     "keys": "tsx scripts/keys.ts",
-    "sync": "tsx scripts/sync.ts"
+    "sync": "tsx scripts/sync.ts",
+    "check": "tsx scripts/check.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",

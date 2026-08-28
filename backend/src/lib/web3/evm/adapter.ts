@@ -12,7 +12,7 @@ import {
   getTransaction,
   simulate,
 } from './tx.js'
-import { requireSingleSigner, serializePerSigner } from '../nonce.js'
+import { requireSingleSigner, serializePerSigner } from '../runner.js'
 import { evmNonceManager } from './nonce.js'
 
 const trimSlash = (url: string): string => url.replace(/\/$/, '')
@@ -58,15 +58,32 @@ export const evmAdapter: ChainAdapter = {
         const nonce = await evmNonceManager(getProvider(chain), from, chain.key)
         for (const warning of nonce.warnings) hooks?.onWarning?.(warning)
 
+        /**
+         * 每笔用了哪个 nonce。settle 阶段是并发的，而重发替换交易必须用**同一个** nonce，
+         * 所以得按 item 记住，不能只留一个"当前 nonce"。
+         */
+        const usedNonce = new Map<string, number>()
+
         const strategy: BatchStrategy = {
-          nextSequence: () => nonce.next(),
-          commitSequence: () => nonce.commit(),
           simulate: (item) => simulate(chain, item.request),
-          build: (item, sequence) => buildUnsigned(chain, item.request, sequence!),
-          broadcast: (signed) => broadcast(chain, signed),
+
+          // 取号在这里 —— build 只在预演通过后才被调用，所以预演失败天然不消耗序号
+          build: async (item) => {
+            const next = nonce.next()!
+            usedNonce.set(item.id, next)
+            return buildUnsigned(chain, item.request, next)
+          },
+
+          // 只有节点收下了才推进；广播失败时序号让给下一笔，不留空洞
+          broadcast: async (signed) => {
+            const hash = await broadcast(chain, signed)
+            nonce.commit()
+            return hash
+          },
+
           // 等回执 → 查状态 → 没变就翻倍 gas 同 nonce 重发 → 还不行就自转账让出 nonce
-          settle: (item, hash, sequence) =>
-            confirmWithEscalation({ chain, item, hash, nonce: sequence ?? 0, sign }),
+          settle: (item, hash) =>
+            confirmWithEscalation({ chain, item, hash, nonce: usedNonce.get(item.id)!, sign }),
         }
 
         return runBatch(items, sign, strategy, hooks, options)

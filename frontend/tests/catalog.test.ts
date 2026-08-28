@@ -28,8 +28,6 @@ vi.mock('../src/store/api', () => ({
   postLog: vi.fn(),
 }))
 vi.mock('../src/chain/multicall', () => ({ readStates: (...args: unknown[]) => readStates(...args) }))
-vi.mock('../src/chain/wallet', () => ({ walletFor: vi.fn() }))
-
 const REGISTRY: Registry = {
   configVersion: 'v1',
   businessLines: [

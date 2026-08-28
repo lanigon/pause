@@ -1,10 +1,10 @@
 import type { ContractDef } from '../models/contract.model.js'
-import type { OperationKind } from '../executor/operations.js'
-import { labelOf } from '../executor/operations.js'
+import type { OperationKind } from './operations.js'
+import { labelOf } from './operations.js'
 import type { AuthContext } from '../services/auth.service.js'
-import { assertAuthorized, execute, Phase } from '../executor/executor.js'
+import { assertAuthorized, execute, Phase } from './execution.service.js'
 import type { ChainFamily, SignPayloadFn } from '../lib/web3/index.js'
-import type { ExecutionEvent } from '../executor/executor.js'
+import type { ExecutionEvent } from './execution.service.js'
 import { getChain, getContract, getRegistry } from './registry.service.js'
 import { openSessions } from '../lib/keys/signer.js'
 import { keyFor, type LocalKey } from '../lib/keys/store.js'
@@ -235,13 +235,13 @@ function hintFor(code: string): string | undefined {
     case ErrorCode.GPG_WRONG_SECRET:
       return '口令/PIN 不对。注意 YubiKey 连错 3 次会锁卡，确认后再试'
     case ErrorCode.GPG_ADDRESS_MISMATCH:
-      return '这是安全事件：密钥文件解出来的地址和 data/signers.json 里声明的对不上。先确认密钥没被替换，再用 `npm run keys verify` 核对'
+      return '这是安全事件：密钥文件解出来的地址和 secrets/<链族>.address 里声明的对不上。先确认密钥没被替换，再用 `npm run keys verify` 核对'
     case ErrorCode.GPG_TIMEOUT:
       return 'YubiKey 可能在等触摸。去按一下插在后端机器上的那把 key'
     case ErrorCode.RPC_UNAVAILABLE:
       return '该链没有可用 RPC。运行 `npm run sync rpc`，或配上 ALCHEMY_API_KEY'
     case ErrorCode.SIGNER_SCOPE_DENIED:
-      return '在 data/signers.json 里补上对应链族的密钥声明'
+      return '跑 `npm run keys encrypt` 生成对应链族的 secrets/<链族>.key.gpg'
     default:
       return undefined
   }

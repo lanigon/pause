@@ -101,11 +101,27 @@ function signPayload(
   }
 }
 
+/**
+ * 派生地址，用于和声明地址比对。
+ *
+ * 必须和 signPayload 一样穷举链族，**不能 else 兜底** ——
+ * 兜底的话，接一条新链会静默派生出一个 Tron 地址，然后在地址比对处失败，
+ * 报出来的是"密钥可能已被替换"这种安全告警，指向完全错误的方向。
+ */
 function deriveAddress(family: ChainFamily, keyHex: string): string {
-  if (family === EVM) return new Wallet(`0x${keyHex}`).address
-  const base58 = tronUtils.address.fromPrivateKey(keyHex)
-  if (base58 === false) throw new Error('无法从私钥派生 Tron 地址')
-  return base58
+  switch (family) {
+    case EVM:
+      return new Wallet(`0x${keyHex}`).address
+
+    case TRON: {
+      const base58 = tronUtils.address.fromPrivateKey(keyHex)
+      if (base58 === false) throw new Error('无法从私钥派生 Tron 地址')
+      return base58
+    }
+
+    default:
+      throw new Error(`未实现 ${family} 链族的地址派生（在 lib/keys/worker.ts 的 deriveAddress 里补充）`)
+  }
 }
 
 // ── 主流程 ──────────────────────────────────────────────────────────────────

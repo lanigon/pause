@@ -63,8 +63,19 @@ async function run(operation: OperationKind) {
 
   try {
     // GPG 模式不需要输任何密钥 —— 后端本地解密，需要时用户去按插在服务器上的 YubiKey
-    await (store.mode === 'wallet' ? store.runWalletBatch(operation) : store.runGpgBatch(operation))
-    ElMessage.success(`批量${label}已完成`)
+    const { ok, failed } = await (store.mode === 'wallet'
+      ? store.runWalletBatch(operation)
+      : store.runGpgBatch(operation))
+
+    /**
+     * 按真实结果给提示。
+     * 两个 batch 函数都把错误吞进事件流里正常返回，所以下面的 catch 基本不会触发 ——
+     * 无条件报"已完成"的话，10 个合约全失败用户也只看到一条绿色成功提示。
+     * 紧急暂停时这个代价太高。
+     */
+    if (failed === 0) ElMessage.success(`批量${label}完成：${ok} 个成功`)
+    else if (ok === 0) ElMessage.error(`批量${label}失败：${failed} 个都没成功，详见执行进度`)
+    else ElMessage.warning(`批量${label}：成功 ${ok} 个，失败 ${failed} 个，详见执行进度`)
   } catch (error) {
     ElMessage.error((error as Error).message ?? '执行失败')
   }

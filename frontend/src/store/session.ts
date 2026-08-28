@@ -1,6 +1,6 @@
 import { ref } from 'vue'
 import * as api from './api'
-import type { WalletAdapter } from '../chain/wallet'
+import { byFamily, signsIn, type WalletAdapter } from '../chain/wallet'
 import type { ChainFamily, Operator, SignMode } from '../types'
 
 /**
@@ -11,13 +11,13 @@ import type { ChainFamily, Operator, SignMode } from '../types'
  */
 export function useSession() {
   const operator = ref<Operator | null>(null)
-  const connected = ref<Record<ChainFamily, string | null>>({ evm: null, tron: null })
+  const connected = ref<Record<ChainFamily, string | null>>(byFamily<string | null>(() => null))
   /**
    * 每个链族当前用的是哪个钱包。
    * 必须记住 —— 用户装了多个钱包时，发交易要用他连的那个，
    * 不能回头再去猜 window.ethereum 现在是谁。
    */
-  const wallets = ref<Record<ChainFamily, WalletAdapter | null>>({ evm: null, tron: null })
+  const wallets = ref<Record<ChainFamily, WalletAdapter | null>>(byFamily<WalletAdapter | null>(() => null))
   /** 签名模式：tab 切的就是这个 */
   const mode = ref<SignMode>('gpg')
 
@@ -30,11 +30,11 @@ export function useSession() {
 
     wallet.onAccountChange((next) => {
       connected.value = { ...connected.value, [family]: next }
-      if (next === null && family === 'evm') onDisconnect()
+      if (next === null && signsIn(family)) onDisconnect()
     })
 
-    // Tron 不登录；EVM 且尚未登录时才走签名
-    if (family !== 'evm' || operator.value) return false
+    // 不参与登录的链族（Tron）只是连上；已登录的也不用再签一次
+    if (!signsIn(family) || operator.value) return false
 
     const timestamp = Date.now()
     const nonce = api.randomNonce()
@@ -49,8 +49,8 @@ export function useSession() {
   function resetSession(): void {
     api.setToken(null)
     operator.value = null
-    connected.value = { evm: null, tron: null }
-    wallets.value = { evm: null, tron: null }
+    connected.value = byFamily<string | null>(() => null)
+    wallets.value = byFamily<WalletAdapter | null>(() => null)
   }
 
   return { operator, connected, wallets, mode, connect, resetSession }

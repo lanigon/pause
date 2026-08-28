@@ -184,7 +184,7 @@ export async function buildUnsigned(
 
   if (!payload) throw new AppError(ErrorCode.BROADCAST_FAILED, `无法从 ${chain.key} 获取 gas 价格`)
 
-  return { family: chain.type, sequence: nonce, payload }
+  return { family: chain.type, payload }
 }
 
 /* ─────────── 广播与确认 ─────────── */
@@ -393,7 +393,7 @@ async function buildSelfTransfer(
         : null
 
   if (!payload) throw new AppError(ErrorCode.BROADCAST_FAILED, `无法从 ${chain.key} 获取 gas 价格`)
-  return { family: chain.type, sequence: nonce, payload }
+  return { family: chain.type, payload }
 }
 
 /** 用 multicall 读一次目标状态，判断是否已经达成 */

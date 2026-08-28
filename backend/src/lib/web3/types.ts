@@ -31,7 +31,7 @@ export enum TxStatus {
 /** 批量执行中单笔的状态 */
 export enum BatchItemStatus {
   PENDING = 'pending',
-  /** 预演未通过，跳过且不消耗序号（不留 nonce 空洞） */
+  /** 预演未通过，跳过 */
   SKIPPED = 'skipped',
   CONFIRMED = 'confirmed',
   FAILED = 'failed',
@@ -94,8 +94,6 @@ export interface BalanceCheck {
 export interface UnsignedPayload {
   /** 由哪个链族产生 —— GPG worker 按它分派到对应的签名实现 */
   readonly family: ChainFamily
-  /** EVM 为 nonce；无序号的链为 undefined。仅用于展示与日志 */
-  readonly sequence?: number
   /** family-specific 原始负载，原样透传给 signer */
   readonly payload: Readonly<Record<string, unknown>>
 }
@@ -146,7 +144,7 @@ export interface BatchHooks {
   /** 预演完成（无论通过与否）。通过时带 gas 估算 */
   readonly onSimulate?: (id: string, result: SimulateResult) => void
   readonly onSkip?: (id: string, reason: string) => void
-  readonly onSign?: (id: string, sequence?: number) => void
+  readonly onSign?: (id: string) => void
   readonly onBroadcast?: (id: string, hash: string) => void
   /** 终态。result.hash 是**最终** hash —— gas 阶梯重发可能换过 */
   readonly onSettle?: (id: string, result: ConfirmResult & { hash: string }) => void

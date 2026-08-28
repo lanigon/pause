@@ -27,7 +27,8 @@ vi.mock('../src/store/api', () => ({
   postLog: vi.fn(),
 }))
 vi.mock('../src/chain/multicall', () => ({ readStates: vi.fn() }))
-vi.mock('../src/chain/wallet', () => ({ walletFor: vi.fn() }))
+vi.mock('../src/chain/wallet', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/chain/wallet')>()), walletFor: vi.fn() }))
 
 const REGISTRY = {
   configVersion: 'v1',

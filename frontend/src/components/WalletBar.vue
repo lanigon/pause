@@ -3,7 +3,7 @@ import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { ArrowDown } from '@element-plus/icons-vue'
 import { useStore } from '../store'
-import { discoverWallets, FAMILIES, shorten, type WalletAdapter } from '../chain/wallet'
+import { byFamily, discoverWallets, FAMILIES, shorten, type WalletAdapter } from '../chain/wallet'
 import type { ChainFamily } from '../types'
 
 /**
@@ -19,7 +19,10 @@ import type { ChainFamily } from '../types'
 const store = useStore()
 
 const connecting = ref<string | null>(null)
-const found = ref<Record<ChainFamily, readonly WalletAdapter[]>>({ evm: [], tron: [] })
+// 从 FAMILIES 生成，加一族不会漏掉这里 —— 漏了的话模板里 found[家族].some 会直接崩
+const found = ref<Record<ChainFamily, readonly WalletAdapter[]>>(
+  byFamily<readonly WalletAdapter[]>(() => []),
+)
 const scanning = ref(false)
 
 /** 装没装插件不是响应式的：进页面扫一次，每次点开按钮再扫一次 */

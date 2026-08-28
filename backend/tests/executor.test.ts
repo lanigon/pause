@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { OperationKind, expectedPausedState, labelOf, requiredPausedState } from '../src/executor/operations.js'
+import { OperationKind, expectedPausedState, labelOf, requiredPausedState } from '../src/services/operations.js'
 import { KeyedMutex } from '../src/lib/utils/mutex.js'
 
 /**

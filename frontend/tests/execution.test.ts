@@ -38,10 +38,10 @@ const MOCK_WALLET = {
   sendTransaction: (...args: unknown[]) => sendTransaction(...args),
 }
 
-vi.mock('../src/chain/wallet', () => ({
+// 只替掉真会碰浏览器的 discoverWallets；byFamily/signsIn 是纯函数，用真的
+vi.mock('../src/chain/wallet', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/chain/wallet')>()),
   discoverWallets: async () => [MOCK_WALLET],
-  FAMILIES: [{ family: 'evm', label: 'EVM', signsIn: true }],
-  shorten: (a: string) => a,
 }))
 
 const REGISTRY: Registry = {

@@ -23,18 +23,19 @@ function makeStrategy(overrides: Partial<BatchStrategy> = {}) {
   const built: { id: string; sequence: number | undefined }[] = []
   const broadcasted: string[] = []
 
+  /**
+   * 模拟 EVM adapter 的做法：取号在 build 里，推进在 broadcast 成功后。
+   * runner 本身不认识序号 —— 这里是为了验证那两条不变量仍然成立。
+   */
   const strategy: BatchStrategy = {
-    nextSequence: () => nonce,
-    commitSequence: () => {
-      nonce += 1
-    },
     simulate: async () => ({ ok: true }),
-    build: async (i, sequence) => {
-      built.push({ id: i.id, sequence })
-      return { family: 'evm', sequence, payload: { id: i.id } }
+    build: async (i) => {
+      built.push({ id: i.id, sequence: nonce })
+      return { family: 'evm', payload: { id: i.id } }
     },
     broadcast: async (signed) => {
       broadcasted.push(String((signed as { id?: string }).id ?? ''))
+      nonce += 1
       return `0xhash-${broadcasted.length}`
     },
     settle: async (_i, hash) => ({ status: TxStatus.CONFIRMED, hash, blockNumber: 1 }),
@@ -90,9 +91,9 @@ describe('批量执行的规则', () => {
 
   it('★ 单笔失败不中断整批', async () => {
     const { strategy } = makeStrategy({
-      build: async (i, sequence) => {
+      build: async (i) => {
         if (i.id === 'b') throw new Error('拼装炸了')
-        return { family: 'evm', sequence, payload: { id: i.id } }
+        return { family: 'evm', payload: { id: i.id } }
       },
     })
 
@@ -188,7 +189,7 @@ describe('批量执行的规则', () => {
 
     expect(hooks.onSimulate).toHaveBeenCalledTimes(2)
     expect(hooks.onSkip).toHaveBeenCalledWith('skip', 'no-op')
-    expect(hooks.onSign).toHaveBeenCalledWith('a', 100)
+    expect(hooks.onSign).toHaveBeenCalledWith('a')
     expect(hooks.onBroadcast).toHaveBeenCalledWith('a', expect.stringContaining('0xhash'))
     expect(hooks.onSettle).toHaveBeenCalledOnce()
     expect(hooks.onFail).not.toHaveBeenCalled()

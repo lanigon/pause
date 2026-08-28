@@ -29,9 +29,16 @@ const time = (ts: string): string =>
   new Date(ts).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit' })
 
+/**
+ * 交易的浏览器链接。
+ * Tron 的路径和 EVM 不一样（/transaction/ 而不是 /tx/），
+ * 拼错了点开是 404 —— 和后端 tron/adapter.ts 保持同一份对照。
+ */
 const explorerUrl = (chain: string, hash: string): string => {
   const c = store.chainOf(chain)
-  return c ? `${c.explorer.replace(/\/$/, '')}/tx/${hash}` : '#'
+  if (!c) return '#'
+  const path = c.type === 'tron' ? 'transaction' : 'tx'
+  return `${c.explorer.replace(/\/$/, '')}/${path}/${hash}`
 }
 </script>
 

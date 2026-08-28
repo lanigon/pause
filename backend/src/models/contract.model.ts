@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { anyAddress, identifier } from './primitives.js'
+import { identifier } from './primitives.js'
 
 /**
  * contracts.json 里的两张表：业务线与合约。
@@ -20,7 +20,15 @@ export const contractSchema = z.object({
   name: z.string().min(1),
   businessLine: identifier,
   chain: identifier,
-  address: anyAddress,
+  /**
+   * 地址格式**不在这里校验**。
+   *
+   * schema 只认识 EVM/Tron 两种形状的话，接一条 Solana 链时每一行合约
+   * 都会在这一步被拒，而真正权威的检查（registry.service 里按链分派的
+   * meta(chain.type).isValidAddress）根本轮不到执行 —— 那里还知道这个合约
+   * 配在哪条链上，能报出"地址不符合 evm 链的格式"这种有用的话。
+   */
+  address: z.string().min(1),
 })
 
 export type ContractDef = z.infer<typeof contractSchema>

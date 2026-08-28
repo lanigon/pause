@@ -1,4 +1,5 @@
-import { BrowserProvider, type Eip1193Provider } from 'ethers'
+import { BrowserProvider, Interface, type Eip1193Provider } from 'ethers'
+import { PAUSABLE_ABI } from './abi'
 import type { Chain, ChainFamily } from '../types'
 
 /**
@@ -20,13 +21,24 @@ export interface WalletAdapter {
   isInstalled(): boolean
   connect(): Promise<string>
   signMessage(message: string): Promise<string>
-  /** 发交易。calldata 由调用方编码好 */
-  sendTransaction(chain: Chain, to: string, data: string): Promise<string>
+  /**
+   * 发一笔无参的操作交易（pause / unpause）。
+   *
+   * 传的是**操作名**，不是编码好的 calldata —— 各链族的编码方式根本不同：
+   * EVM 要 ABI 编码成 4 字节选择器，Tron 要的是 `pause()` 这样的方法签名字符串。
+   * 让调用方去编码的话，它就得知道每条链族的编码规则，那正是 adapter 该藏起来的东西。
+   */
+  sendTransaction(chain: Chain, to: string, operation: string): Promise<string>
   /** 当前所在链（EVM 为 chainId，Tron 返回 null 表示不适用） */
   currentChainId(): Promise<number | null>
   switchChain(chain: Chain): Promise<void>
   onAccountChange(handler: (address: string | null) => void): void
 }
+
+/** 和 multicall 共用同一份 ABI，免得两处各写一份、改一处漏一处 */
+const iface = new Interface(PAUSABLE_ABI)
+
+const encodeOperation = (operation: string): string => iface.encodeFunctionData(operation)
 
 type InjectedProvider = Eip1193Provider & {
   on?: (event: string, handler: (...args: unknown[]) => void) => void
@@ -95,10 +107,11 @@ function createEvmWallet(
       return (await new BrowserProvider(provider).getSigner()).signMessage(message)
     },
 
-    async sendTransaction(chain, to, data) {
+    async sendTransaction(chain, to, operation) {
       await wallet.switchChain(chain)
       const signer = await new BrowserProvider(provider).getSigner()
-      const tx = await signer.sendTransaction({ to, data })
+      // ABI 编码在这里做 —— 平台的操作都是无参的，编出来就是 4 字节选择器
+      const tx = await signer.sendTransaction({ to, data: encodeOperation(operation) })
       return tx.hash
     },
 
@@ -212,11 +225,7 @@ const ANNOUNCE_WINDOW_MS = 300
  *
  * 没有任何钱包应答时退回 window.ethereum（老钱包不支持 6963）。
  */
-export async function discoverWallets(family: ChainFamily): Promise<readonly WalletAdapter[]> {
-  if (typeof window === 'undefined') return []
-  if (family === 'tron') return tronWallet.isInstalled() ? [tronWallet] : []
-  if (family !== 'evm') return []
-
+async function discoverEvm(): Promise<readonly WalletAdapter[]> {
   const found = new Map<string, Eip6963Detail>()
   const onAnnounce = (event: Event): void => {
     const detail = (event as CustomEvent<Eip6963Detail>).detail
@@ -238,11 +247,47 @@ export async function discoverWallets(family: ChainFamily): Promise<readonly Wal
   return window.ethereum ? [createEvmWallet(window.ethereum, '浏览器钱包', 'injected')] : []
 }
 
+const discoverTron = async (): Promise<readonly WalletAdapter[]> =>
+  tronWallet.isInstalled() ? [tronWallet] : []
+
+/**
+ * 链族 → 怎么发现它的钱包。**加一条异构链就在这里加一行**。
+ * 没注册的链族返回空列表，界面显示"没有检测到钱包"，不会拿 EVM 的逻辑去套。
+ */
+const DISCOVERY: Record<string, () => Promise<readonly WalletAdapter[]>> = {
+  evm: discoverEvm,
+  tron: discoverTron,
+}
+
+/**
+ * 列出某个链族下装了哪些钱包。
+ *
+ * EVM 走 EIP-6963：我们喊一声 requestProvider，装了的钱包各自应答，
+ * 带上自己的名字、图标和**独立的 provider**。这样多个钱包能并存，
+ * 用户点哪个就用哪个 —— 不像 window.ethereum 那样只有一个赢家。
+ */
+export async function discoverWallets(family: ChainFamily): Promise<readonly WalletAdapter[]> {
+  if (typeof window === 'undefined') return []
+  return (await DISCOVERY[family]?.()) ?? []
+}
+
+/**
+ * 平台支持的链族。**这是唯一一处链族清单** ——
+ * store 的初始状态、顶栏的按钮都从它生成，加一族只改这里和上面的 DISCOVERY。
+ */
 export const FAMILIES: readonly { family: ChainFamily; label: string; signsIn: boolean }[] = [
   // 只有 EVM 参与登录 —— 身份就是一个 EVM 地址
   { family: 'evm', label: 'EVM', signsIn: true },
   { family: 'tron', label: 'Tron', signsIn: false },
 ]
+
+/** 按链族建一张表，每族一个初值。避免各处手写 { evm: …, tron: … } */
+export const byFamily = <T,>(initial: () => T): Record<ChainFamily, T> =>
+  Object.fromEntries(FAMILIES.map((f) => [f.family, initial()])) as Record<ChainFamily, T>
+
+/** 这个链族参不参与签名登录 */
+export const signsIn = (family: ChainFamily): boolean =>
+  FAMILIES.find((f) => f.family === family)?.signsIn === true
 
 export const shorten = (address: string, head = 6, tail = 4): string =>
   address.length <= head + tail ? address : `${address.slice(0, head)}…${address.slice(-tail)}`

@@ -8,15 +8,13 @@ import { z } from 'zod'
  * 依赖它，模型之间会织出一张网。抽到这里，依赖就都是单向的。
  */
 
-/** EVM 地址：只校验形状，checksum 由 adapter 归一化 */
+/**
+ * EVM 地址：只校验形状，checksum 由 adapter 归一化。
+ *
+ * 只有 operators.json 用它 —— 登录只认 EVM 签名，这是设计决定，不随链族变。
+ * **合约地址不用它**：那是按链分派的，见 registry.service 的引用完整性校验。
+ */
 export const evmAddress = z.string().regex(/^0x[0-9a-fA-F]{40}$/, '不是合法的 EVM 地址')
-
-/** Tron base58 地址：T 开头 + 33 位 base58 */
-export const tronAddress = z
-  .string()
-  .regex(/^T[1-9A-HJ-NP-Za-km-z]{33}$/, '不是合法的 Tron base58 地址')
-
-export const anyAddress = z.union([evmAddress, tronAddress])
 
 /** 配置里的 id */
 export const identifier = z

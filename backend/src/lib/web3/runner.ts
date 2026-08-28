@@ -10,29 +10,53 @@ import type {
   UnsignedPayload,
 } from './types.js'
 import { logger } from '../utils/logger.js'
+import { KeyedMutex } from '../utils/mutex.js'
+import { AppError, ErrorCode } from '../utils/errors.js'
 
 /**
  * 批量执行的公共循环。
  *
- * 各链族的差异通过 BatchStrategy 注入，循环本身共用 —— 这样"预演失败不消耗序号、
- * 单笔失败不中断整批、签名失败整批中止"这些**规则**只写一遍，两边实现不会走样。
+ * 各链族的差异通过 BatchStrategy 注入，循环本身共用 —— 这样"单笔失败不中断整批、
+ * 签名失败整批中止并结算已广播的"这些**规则**只写一遍，两边实现不会走样。
+ *
+ * 循环里**没有"序号"这个概念**。nonce 是 EVM 特有的（Tron 靠 ref_block 时间窗，
+ * Solana 常规交易靠 recent blockhash），不该让每条异构链都来适配它。
+ * EVM 在自己的 build 里取号、在自己的 broadcast 成功后推进 —— 见 evm/nonce.ts。
+ * "预演失败不消耗序号"这条也就由构造保证了：build 只在预演通过后才被调用。
  */
 export interface BatchStrategy {
-  /** 取下一个待用序号；无序号模型返回 undefined */
-  readonly nextSequence: () => number | undefined
-  /** 节点已接受该笔 → 推进序号。广播失败时不调用，序号让给下一笔（不留空洞） */
-  readonly commitSequence: () => void
-
   readonly simulate: (item: BatchItem) => Promise<SimulateResult>
-  readonly build: (item: BatchItem, sequence: number | undefined) => Promise<UnsignedPayload>
+  readonly build: (item: BatchItem) => Promise<UnsignedPayload>
   readonly broadcast: (signed: Readonly<Record<string, unknown>>) => Promise<string>
   /** 等待终态。策略内部可重发（提高 gas 的替换交易），故返回最终 hash */
-  readonly settle: (
-    item: BatchItem,
-    hash: string,
-    sequence: number | undefined,
-  ) => Promise<ConfirmResult & { hash: string }>
+  readonly settle: (item: BatchItem, hash: string) => Promise<ConfirmResult & { hash: string }>
 }
+
+/* ══ 批次前置 ══════════════════════════════════════════════════════════ */
+
+/**
+ * 一批交易必须来自同一个签名地址。
+ * 这是所有链族共同的前提 —— 混着来的话，"这是第几笔"之类的账就没法算了。
+ */
+export function requireSingleSigner(
+  items: readonly BatchItem[],
+  normalize: (address: string) => string,
+): string {
+  const addresses = new Set(items.map((item) => normalize(item.request.fromAddress)))
+  if (addresses.size !== 1) {
+    throw new AppError(ErrorCode.INTERNAL, '一批交易必须来自同一个签名地址')
+  }
+  return [...addresses][0]!
+}
+
+/** 同一个 (链, 签名地址) 上的批次串行执行 */
+const signerMutex = new KeyedMutex()
+
+export const serializePerSigner = <T>(
+  chainKey: string,
+  signer: string,
+  task: () => Promise<T>,
+): Promise<T> => signerMutex.runExclusive(`${chainKey}:${signer.toLowerCase()}`, task)
 
 /** 签名回调抛错 = 密钥有问题，必须整批中止 */
 export class SigningAbortedError extends Error {
@@ -53,7 +77,7 @@ export async function runBatch(
   options: BatchOptions = {},
 ): Promise<readonly BatchItemResult[]> {
   const results: BatchItemResult[] = []
-  const broadcasted: { item: BatchItem; hash: string; sequence: number | undefined }[] = []
+  const broadcasted: { item: BatchItem; hash: string }[] = []
 
   for (const item of items) {
     if (options.signal?.aborted) {
@@ -77,12 +101,10 @@ export async function runBatch(
       continue
     }
 
-    const sequence = strategy.nextSequence()
-
     // ── 拼装 ──
     let payload: UnsignedPayload
     try {
-      payload = await strategy.build(item, sequence)
+      payload = await strategy.build(item)
     } catch (error) {
       const reason = messageOf(error)
       results.push({ id: item.id, status: BatchItemStatus.FAILED, reason })
@@ -108,13 +130,12 @@ export async function runBatch(
       const settled = await settleAll(broadcasted, strategy, hooks)
       throw new SigningAbortedError(reason, [...results, ...settled])
     }
-    hooks.onSign?.(item.id, sequence)
+    hooks.onSign?.(item.id)
 
-    // ── 广播：只有节点接受了才推进序号 ──
+    // ── 广播 ──
     let hash: string
     try {
       hash = await strategy.broadcast(signed)
-      strategy.commitSequence()
     } catch (error) {
       const reason = messageOf(error)
       results.push({ id: item.id, status: BatchItemStatus.FAILED, reason })
@@ -123,7 +144,7 @@ export async function runBatch(
     }
 
     hooks.onBroadcast?.(item.id, hash)
-    broadcasted.push({ item, hash, sequence })
+    broadcasted.push({ item, hash })
   }
 
   // ── 确认阶段并发跑：都已经广播出去了，等待互不影响 ──
@@ -132,14 +153,14 @@ export async function runBatch(
 
 /** 确认阶段并发跑：都已经广播出去了，等待互不影响 */
 async function settleAll(
-  broadcasted: readonly { item: BatchItem; hash: string; sequence: number | undefined }[],
+  broadcasted: readonly { item: BatchItem; hash: string }[],
   strategy: BatchStrategy,
   hooks: BatchHooks,
 ): Promise<BatchItemResult[]> {
   return Promise.all(
-    broadcasted.map(async ({ item, hash, sequence }): Promise<BatchItemResult> => {
+    broadcasted.map(async ({ item, hash }): Promise<BatchItemResult> => {
       try {
-        const result = await strategy.settle(item, hash, sequence)
+        const result = await strategy.settle(item, hash)
         hooks.onSettle?.(item.id, result)
         return {
           id: item.id,

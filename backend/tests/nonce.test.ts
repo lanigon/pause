@@ -1,15 +1,15 @@
 import { describe, expect, it, vi } from 'vitest'
-import { NO_SEQUENCE, requireSingleSigner, serializePerSigner } from '../src/lib/web3/nonce.js'
+import { requireSingleSigner, serializePerSigner } from '../src/lib/web3/runner.js'
 import { evmNonceManager } from '../src/lib/web3/evm/nonce.js'
 import type { BatchItem } from '../src/lib/web3/types.js'
 
 /**
- * 批次序号管理 —— 各链族共同遵守的契约。
+ * 批次前置（所有链族共用）+ EVM nonce（只有 EVM 有）。
  *
- * 三条不变量，接新链时也必须成立：
- *   ① 一批交易来自同一个签名地址（不同地址有各自独立的序号空间）
+ * 三条不变量：
+ *   ① 一批交易来自同一个签名地址（不同地址有各自独立的账）
  *   ② 同一个 (链, 地址) 的批次串行（并发会各自读到同一个基准，互相覆盖）
- *   ③ 序号只在广播成功后推进（失败要能原样复用，不留洞）
+ *   ③ nonce 只在广播成功后推进（失败要能原样复用，不留洞）—— 仅 EVM
  */
 const item = (from: string): BatchItem =>
   ({ id: 'x', request: { fromAddress: from, contractAddress: '0xc', method: 'pause', args: [] } }) as BatchItem
@@ -116,15 +116,7 @@ describe('③ EVM 序号分配', () => {
   })
 })
 
-describe('无序号模型（Tron 这类）', () => {
-  it('next 恒为 undefined，commit 是空操作 —— 接口一致，行为为空', () => {
-    expect(NO_SEQUENCE.next()).toBeUndefined()
-    NO_SEQUENCE.commit()
-    expect(NO_SEQUENCE.next()).toBeUndefined()
-    expect(NO_SEQUENCE.warnings).toEqual([])
-  })
-
-  it('是冻结的，谁都改不动它', () => {
-    expect(Object.isFrozen(NO_SEQUENCE)).toBe(true)
-  })
-})
+/**
+ * Tron 那边不再有任何 nonce 词汇 —— 以前要写 `nextSequence: () => undefined`
+ * 这种空实现来凑接口，现在 runner 压根不认识序号，所以没什么可测的了。
+ */

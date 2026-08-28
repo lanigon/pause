@@ -90,7 +90,7 @@ export const getRegistry = () => request<Registry>('/registry')
  * 浏览器会直接拦掉 —— 那种情况下退回来用这个。
  */
 export const getStates = (contractIds: string[]) =>
-  request<Record<string, { paused?: boolean; owner?: string }>>(
+  request<Record<string, { paused?: boolean }>>(
     `/states?ids=${encodeURIComponent(contractIds.join(','))}`,
   )
 

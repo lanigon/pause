@@ -7,7 +7,7 @@ import { constantCall, getBlockNumber, resetClients, toBase58, toHex41, READ_CON
 import { broadcast, buildTransaction, getTransaction, waitForConfirmation } from './tx.js'
 import { redactRpcUrl, withTimeout } from '../../utils/net.js'
 import { rpcProvider } from '../../rpc/rpcProvider.js'
-import { NO_SEQUENCE, requireSingleSigner, serializePerSigner } from '../nonce.js'
+import { requireSingleSigner, serializePerSigner } from '../runner.js'
 
 const trimSlash = (url: string): string => url.replace(/\/$/, '')
 
@@ -91,9 +91,6 @@ export const tronAdapter: ChainAdapter = {
 
       return serializePerSigner(chain.key, from, () => {
         const strategy: BatchStrategy = {
-          // 无序号模型：Tron 靠 ref_block + expiration 防重放，没有 nonce 要管
-          nextSequence: () => NO_SEQUENCE.next(),
-          commitSequence: () => NO_SEQUENCE.commit(),
           simulate: (item) => tronAdapter.tx.simulate(chain, item.request),
           // 每次现场构建：交易含 expiration，约 60s 失效
           build: (item) =>

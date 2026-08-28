@@ -4,7 +4,7 @@ import { dto, getRegistry as getRegistrySnapshot, loadRegistry } from '../servic
 import { activeCount } from '../services/batch.service.js'
 import * as logRepo from '../repositories/log.repository.js'
 import { tx } from '../lib/web3/index.js'
-import { readBusinessLineStates, readStates } from '../executor/executor.js'
+import { readBusinessLineStates, readStates } from '../services/execution.service.js'
 import { currentOperator } from '../middlewares/auth.middleware.js'
 import { ok } from '../lib/utils/response.js'
 import { openSse } from '../lib/utils/sse.js'
