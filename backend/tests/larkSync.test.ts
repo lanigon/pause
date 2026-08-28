@@ -15,9 +15,9 @@ import type { Chain } from '../src/models/chain.model.js'
 const rows = (...list: LarkRow[]): LarkRow[] => list
 
 const CHAINS = [
-  { key: 'morph', name: 'Morph Mainnet', type: 'evm', chainId: 2818 },
-  { key: 'ethereum', name: 'Ethereum', type: 'evm', chainId: 1 },
-  { key: 'polygon', name: 'Polygon', type: 'evm', chainId: 137 },
+  { key: 'morph', type: 'evm', chainId: 2818 },
+  { key: 'ethereum', type: 'evm', chainId: 1 },
+  { key: 'polygon', type: 'evm', chainId: 137 },
 ] as unknown as Chain[]
 
 const parse = (...list: LarkRow[]) => toContracts(parseRows(list), undefined, CHAINS)
@@ -98,9 +98,9 @@ describe('按 chainId 定位链', () => {
     expect(skipped).toHaveLength(1)
   })
 
-  it('没填 chainId 时退回按链名匹配，key 和显示名都认', () => {
+  it('没填 chainId 时退回按链名匹配（大小写不敏感）', () => {
     expect(parse({ 业务线: '支付', 链: 'morph', 合约: '0xa' }).contracts[0]?.chain).toBe('morph')
-    expect(parse({ 业务线: '支付', 链: 'Morph Mainnet', 合约: '0xa' }).contracts[0]?.chain).toBe('morph')
+    expect(parse({ 业务线: '支付', 链: 'MORPH', 合约: '0xa' }).contracts[0]?.chain).toBe('morph')
   })
 
   it('既没 chainId 也匹配不上链名时跳过，并说清两条路', () => {

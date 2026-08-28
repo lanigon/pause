@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { multiplierAt, policyFor, scaleFee } from '../src/lib/web3/evm/tx.js'
-import { decodeCall, redactRpcUrl } from '../src/lib/web3/evm/client.js'
+import { decodeCall } from '../src/lib/web3/evm/client.js'
+import { redactRpcUrl } from '../src/lib/utils/net.js'
 import { meta, tx, assertRegistered, supportedFamilies } from '../src/lib/web3/chains.js'
 import type { Chain } from '../src/models/chain.model.js'
 

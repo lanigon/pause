@@ -151,6 +151,8 @@ export interface BatchHooks {
   /** 终态。result.hash 是**最终** hash —— gas 阶梯重发可能换过 */
   readonly onSettle?: (id: string, result: ConfirmResult & { hash: string }) => void
   readonly onFail?: (id: string, reason: string) => void
+  /** 不针对某一笔的整体性提醒（如开工前发现有悬空交易） */
+  readonly onWarning?: (message: string) => void
 }
 
 export interface BatchItemResult {

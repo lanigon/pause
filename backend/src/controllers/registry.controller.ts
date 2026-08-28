@@ -123,12 +123,11 @@ export async function getRpcHealth(_req: Request, res: Response): Promise<void> 
   const results = await Promise.all(
     chains.map(async (chain) => {
       try {
-        return { chain: chain.key, name: chain.name, rpcs: await tx(chain.type).checkHealth(chain) }
+        return { chain: chain.key, rpcs: await tx(chain.type).checkHealth(chain) }
       } catch (error) {
         // 一条链没有可用 RPC 不该让整个接口挂掉，但要明确说出来
         return {
           chain: chain.key,
-          name: chain.name,
           rpcs: [],
           error: error instanceof Error ? error.message : '探测失败',
         }

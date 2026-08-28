@@ -4,6 +4,7 @@ import type { HealthResult, ReadCall, ReadResult } from '../types.js'
 import { PAUSABLE_ABI } from '../abi.js'
 import { rpcProvider } from '../../rpc/rpcProvider.js'
 import { logger } from '../../utils/logger.js'
+import { redactRpcUrl, withTimeout } from '../../utils/net.js'
 
 /**
  * EVM 节点访问：provider 池 + 批量只读 + 健康探测。
@@ -77,16 +78,27 @@ const MULTICALL3_ABI = [
 ]
 
 /**
+ * Multicall3 的规范地址，**每条链都一样**。
+ *
+ * 它用确定性部署（同一个部署者 + 同一个 nonce），所以在几乎所有 EVM 链上
+ * 都落在这个地址。以前每条链在 chains.json 里配一遍，六条链填的是同一个值，
+ * 纯噪音；没部署的链靠配 null 来标记，也很容易漏配或配错。
+ *
+ * 现在直接写死，没部署的链由**运行时**发现 —— 调一个没有代码的地址会失败，
+ * 走下面的 catch 回退到并发单点调用。少一处配置，也少一种配错的方式。
+ */
+const MULTICALL3 = '0xcA11bde05977b3631167028862bE2a173976CA11'
+
+/**
  * 一次 RPC 读回一批合约状态。
- * chain.multicall3 为 null 时回退到并发单点调用。
+ * 这条链上没有 Multicall3 就回退到并发单点调用。
  */
 export async function readBatch(chain: Chain, calls: readonly ReadCall[]): Promise<readonly ReadResult[]> {
   if (calls.length === 0) return []
   const provider = getProvider(chain)
-  if (!chain.multicall3) return fallbackRead(provider, calls)
 
   try {
-    const multicall = new Contract(chain.multicall3, MULTICALL3_ABI, provider)
+    const multicall = new Contract(MULTICALL3, MULTICALL3_ABI, provider)
     const payload = calls.map((call) => ({
       target: call.target,
       allowFailure: true, // 单个合约 revert 不能拖垮整批
@@ -107,7 +119,7 @@ export async function readBatch(chain: Chain, calls: readonly ReadCall[]): Promi
   } catch (error) {
     logger.warn(
       { chain: chain.key, error: error instanceof Error ? error.message : error },
-      'multicall 失败，回退到并发单点调用',
+      'multicall 失败（这条链可能没部署 Multicall3），回退到并发单点调用',
     )
     return fallbackRead(provider, calls)
   }
@@ -149,21 +161,4 @@ export async function checkHealth(chain: Chain, timeoutMs = 4_000): Promise<Heal
       }
     }),
   )
-}
-
-export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), ms).unref()),
-  ])
-}
-
-/** 带 apiKey 的 RPC 只暴露 host，不泄露完整 URL */
-export function redactRpcUrl(url: string): string {
-  try {
-    const parsed = new URL(url)
-    return `${parsed.protocol}//${parsed.host}`
-  } catch {
-    return '[invalid-url]'
-  }
 }

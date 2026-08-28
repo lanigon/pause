@@ -39,8 +39,8 @@ vi.mock('../src/lib/lark/client.js', async (importOriginal) => {
 })
 // 链以 chainId 为准，同步时要从 registry 拿 chains.json
 const CHAINS = [
-  { key: 'morph', name: 'Morph Mainnet', type: 'evm', chainId: 2818 },
-  { key: 'tron', name: 'Tron', type: 'tron', chainId: 728126428 },
+  { key: 'morph', type: 'evm', chainId: 2818 },
+  { key: 'tron', type: 'tron', chainId: 728126428 },
 ]
 vi.mock('../src/services/registry.service.js', () => ({
   loadRegistry: () => loadRegistry(),

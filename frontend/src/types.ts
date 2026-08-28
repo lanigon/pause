@@ -4,15 +4,12 @@ export type ChainFamily = 'evm' | 'tron' | string
 
 export interface Chain {
   key: string
-  name: string
   type: ChainFamily
   chainId: number
   explorer: string
-  confirmations: number
   symbol: string
   decimals: number
   rpcs: string[]
-  multicall3: string | null
 }
 
 export interface BusinessLine {

@@ -5,12 +5,10 @@ import type { ChainAdapter } from '../ChainAdapter.js'
 import { runBatch, type BatchStrategy } from '../runner.js'
 import { constantCall, getBlockNumber, resetClients, toBase58, toHex41, READ_CONCURRENCY } from './client.js'
 import { broadcast, buildTransaction, getTransaction, waitForConfirmation } from './tx.js'
-import { redactRpcUrl, withTimeout } from '../evm/client.js'
+import { redactRpcUrl, withTimeout } from '../../utils/net.js'
 import { rpcProvider } from '../../rpc/rpcProvider.js'
-import { KeyedMutex } from '../../utils/mutex.js'
-import { AppError, ErrorCode } from '../../utils/errors.js'
+import { NO_SEQUENCE, requireSingleSigner, serializePerSigner } from '../nonce.js'
 
-const addressMutex = new KeyedMutex()
 const trimSlash = (url: string): string => url.replace(/\/$/, '')
 
 async function mapWithConcurrency<T, R>(
@@ -89,16 +87,13 @@ export const tronAdapter: ChainAdapter = {
     ): Promise<readonly BatchItemResult[]> {
       if (items.length === 0) return Promise.resolve([])
 
-      const addresses = new Set(items.map((item) => toHex41(item.request.fromAddress)))
-      if (addresses.size !== 1) {
-        throw new AppError(ErrorCode.INTERNAL, '一批交易必须来自同一个签名地址')
-      }
+      const from = requireSingleSigner(items, toHex41)
 
-      return addressMutex.runExclusive(`${chain.key}:${[...addresses][0]!}`, () => {
+      return serializePerSigner(chain.key, from, () => {
         const strategy: BatchStrategy = {
-          // 无序号模型：next 恒为 undefined，commit 是空操作
-          nextSequence: () => undefined,
-          commitSequence: () => undefined,
+          // 无序号模型：Tron 靠 ref_block + expiration 防重放，没有 nonce 要管
+          nextSequence: () => NO_SEQUENCE.next(),
+          commitSequence: () => NO_SEQUENCE.commit(),
           simulate: (item) => tronAdapter.tx.simulate(chain, item.request),
           // 每次现场构建：交易含 expiration，约 60s 失效
           build: (item) =>

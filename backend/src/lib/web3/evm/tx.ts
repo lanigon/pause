@@ -35,6 +35,25 @@ export interface GasPolicy {
  * 所以首发就给节点推荐值的若干倍，超时后翻倍重发。
  * 以太坊主网单独给更激进的参数：出块慢、竞争激烈、失败代价高。
  */
+/**
+ * 等几个确认。
+ *
+ * 就等 1 个 —— 拿到回执之后我们**还会再读一次链上状态**确认 paused 真的变了
+ * （见 confirmWithEscalation），那才是真正的验证。多等确认数只对转账的
+ * 最终性有意义，对"这笔交易上链了没有"没有额外价值。
+ *
+ * 而且这是紧急暂停：以前 Tron 配了 19 个确认，运维要干等一分钟才知道成没成，
+ * 期间还可能以为失败了去重复操作 —— 等待本身成了风险。
+ */
+const CONFIRMATIONS = 1
+
+/**
+ * 自转账让出 nonce 时的 gas 倍数。
+ * 比 gas 阶梯的最后一档（16×）还高 —— 它必须赢过那笔卡住的交易，
+ * 不然白发一笔，nonce 照样堵着。
+ */
+const NONCE_RELEASE_MULTIPLIER = 24
+
 const DEFAULT_POLICY: GasPolicy = { initialMultiplier: 2, receiptTimeoutMs: 10_000, maxAttempts: 4 }
 const POLICY_BY_CHAIN_ID = new Map<number, GasPolicy>([
   [1, { initialMultiplier: 8, receiptTimeoutMs: 30_000, maxAttempts: 4 }],
@@ -163,7 +182,7 @@ export async function buildUnsigned(
         ? { ...base, type: 0, gasPrice: scaleFee(feeData.gasPrice, multiplier).toString() }
         : null
 
-  if (!payload) throw new AppError(ErrorCode.BROADCAST_FAILED, `无法从 ${chain.name} 获取 gas 价格`)
+  if (!payload) throw new AppError(ErrorCode.BROADCAST_FAILED, `无法从 ${chain.key} 获取 gas 价格`)
 
   return { family: chain.type, sequence: nonce, payload }
 }
@@ -187,7 +206,7 @@ export async function broadcast(chain: Chain, signed: Readonly<Record<string, un
 
 async function waitReceipt(chain: Chain, hash: string, timeoutMs: number): Promise<ConfirmResult> {
   try {
-    const receipt = await getProvider(chain).waitForTransaction(hash, chain.confirmations, timeoutMs)
+    const receipt = await getProvider(chain).waitForTransaction(hash, CONFIRMATIONS, timeoutMs)
     if (receipt === null) return { status: TxStatus.TIMEOUT }
     return receipt.status === 1
       ? { status: TxStatus.CONFIRMED, blockNumber: receipt.blockNumber }
@@ -251,7 +270,7 @@ export async function confirmWithEscalation(params: {
     }
 
     if (attempt === policy.maxAttempts - 1) {
-      return { status: TxStatus.TIMEOUT, hash, reason: `已重发 ${policy.maxAttempts} 次仍未上链，请人工介入` }
+      return releaseNonce({ chain, item, hash, nonce, sign })
     }
 
     const multiplier = multiplierAt(policy, attempt + 1)
@@ -266,7 +285,115 @@ export async function confirmWithEscalation(params: {
     }
   }
 
-  return { status: TxStatus.TIMEOUT, hash, reason: '等待上链超时' }
+  return releaseNonce({ chain, item, hash, nonce, sign })
+}
+
+/**
+ * ★ 把卡死的 nonce 让出来 —— 用同一 nonce 发一笔**自转账**顶掉它。
+ *
+ * 为什么必须做：nonce 是严格递增的，N 悬着不动，N+1、N+2 就永远不会被打包。
+ * 这一批里排在后面的合约会「广播成功」但**永远不确认** —— 紧急暂停时
+ * 这意味着只有第一个合约卡住，后面所有合约实际上一个都没暂停，
+ * 而界面看起来像是都发出去了。这比单笔失败危险得多。
+ *
+ * 自转账（to = from，value = 0，21000 gas，没有可 revert 的逻辑）几乎必然上链，
+ * 把 N 干净地消费掉，后面的交易就能正常排队。
+ *
+ * 它本质上是「取消」，所以前后各查一次链上状态 ——
+ * **绝不能把一次已经生效的暂停给取消掉**：
+ *   发之前查：已经暂停了就什么都不做，直接认定成功
+ *   发之后查：替换是竞争关系，原交易也可能反而赢了
+ */
+async function releaseNonce(params: {
+  readonly chain: Chain
+  readonly item: BatchItem
+  readonly hash: string
+  readonly nonce: number
+  readonly sign: SignPayloadFn
+}): Promise<ConfirmResult & { hash: string }> {
+  const { chain, item, nonce, sign } = params
+
+  // ① 发之前再确认一次：状态已达成就绝不能去取消
+  if (await stateSatisfied(chain, item)) {
+    return { status: TxStatus.CONFIRMED, hash: params.hash, reason: '回执未返回，但链上状态已达成' }
+  }
+
+  const from = item.request.fromAddress
+  try {
+    const payload = await buildSelfTransfer(chain, from, nonce)
+    const clearHash = await broadcast(chain, await sign(payload))
+    logger.warn(
+      { chain: chain.key, contractId: item.id, nonce, clearHash },
+      '交易卡死，用自转账让出 nonce，避免后续交易被堵在后面',
+    )
+
+    await waitReceipt(chain, clearHash, policyFor(chain).receiptTimeoutMs)
+
+    // ② 替换是竞争关系 —— 原交易也可能反而赢了
+    if (await stateSatisfied(chain, item)) {
+      return { status: TxStatus.CONFIRMED, hash: params.hash, reason: '虽已发出替换交易，但原交易先一步生效' }
+    }
+
+    return {
+      status: TxStatus.TIMEOUT,
+      hash: params.hash,
+      reason: `交易始终未上链，已用自转账（${clearHash.slice(0, 10)}…）让出 nonce ${nonce}，` +
+        '本合约需要重新操作，同批其余合约不受影响',
+    }
+  } catch (error) {
+    // 让不出来就得说清楚 —— 这条链上后续交易都会被堵住，必须人工介入
+    logger.error(
+      { chain: chain.key, contractId: item.id, nonce, reason: revertReason(error) },
+      '自转账失败，nonce 仍被占用',
+    )
+    return {
+      status: TxStatus.TIMEOUT,
+      hash: params.hash,
+      reason: `交易卡在 nonce ${nonce} 且自转账也失败了，${chain.key} 上后续交易会被堵住，请立即人工介入`,
+    }
+  }
+}
+
+/**
+ * 自转账：给自己转 0，不带 data。
+ * gas 给足 —— 它的唯一职责就是抢在卡住的那笔前面上链，省这点钱没意义。
+ */
+async function buildSelfTransfer(
+  chain: Chain,
+  from: string,
+  nonce: number,
+): Promise<UnsignedPayload> {
+  const feeData = await getProvider(chain).getFeeData()
+  const base = {
+    chainId: chain.chainId,
+    to: from,
+    data: '0x',
+    value: '0',
+    nonce,
+    gasLimit: '21000',
+  }
+
+  const payload =
+    feeData.maxFeePerGas !== null && feeData.maxPriorityFeePerGas !== null
+      ? {
+          ...base,
+          type: 2,
+          maxFeePerGas: scaleFee(feeData.maxFeePerGas, NONCE_RELEASE_MULTIPLIER).toString(),
+          maxPriorityFeePerGas: scaleFee(
+            feeData.maxPriorityFeePerGas,
+            NONCE_RELEASE_MULTIPLIER,
+          ).toString(),
+        }
+      : feeData.gasPrice !== null
+        ? {
+            ...base,
+            type: 0,
+            gasPrice: scaleFee(feeData.gasPrice, NONCE_RELEASE_MULTIPLIER).toString(),
+          }
+        : null
+
+  if (!payload) throw new AppError(ErrorCode.BROADCAST_FAILED, `无法从 ${chain.key} 获取 gas 价格`)
+  return { family: chain.type, sequence: nonce, payload }
 }
 
 /** 用 multicall 读一次目标状态，判断是否已经达成 */

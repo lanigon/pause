@@ -328,8 +328,8 @@ async function runChain(
       phase: Phase.BALANCE,
       chainKey,
       message: enough
-        ? `${chain.name}：签名地址余额 ${result.balance} ${result.symbol}，约够发 ${result.runs} 笔`
-        : `⚠️ ${chain.name}：签名地址余额 ${result.balance} ${result.symbol}，` +
+        ? `${chain.key}：签名地址余额 ${result.balance} ${result.symbol}，约够发 ${result.runs} 笔`
+        : `⚠️ ${chain.key}：签名地址余额 ${result.balance} ${result.symbol}，` +
           `按当前 gas 价格只够发 ${result.runs} 笔（低于 ${LOW_BALANCE_RUNS} 笔，请及时充值）`,
     })
   }
@@ -359,6 +359,8 @@ async function runChain(
         },
         onSkip: (id, reason) =>
           emit({ phase: Phase.SKIP, contractId: id, chainKey, message: `${named(id)}：${reason}` }),
+        // 整批性的提醒，不属于任何一个合约（如开工前就有悬空交易）
+        onWarning: (message) => emit({ phase: Phase.BALANCE, chainKey, message: `⚠️ ${message}` }),
         onSign: (id) =>
           emit({ phase: Phase.SIGN, contractId: id, chainKey, message: `${named(id)}：已签名` }),
         onBroadcast: (id, hash) =>
@@ -389,12 +391,12 @@ async function runChain(
   } catch (error) {
     // 签名失败 = 密钥有问题，该链中止；已完成的部分仍要汇报
     if (error instanceof SigningAbortedError) {
-      emit({ phase: Phase.ERROR, chainKey, message: `签名失败，${chain.name} 剩余操作已中止` })
+      emit({ phase: Phase.ERROR, chainKey, message: `签名失败，${chain.key} 剩余操作已中止` })
       results = error.completed
     } else {
       const reason = error instanceof Error ? error.message : String(error)
       logger.error({ chainKey, reason }, '链上批量执行异常')
-      emit({ phase: Phase.ERROR, chainKey, message: `${chain.name} 执行异常：${reason}` })
+      emit({ phase: Phase.ERROR, chainKey, message: `${chain.key} 执行异常：${reason}` })
       return group.map((contract) => ({
         contractId: contract.id,
         contractName: contract.name,

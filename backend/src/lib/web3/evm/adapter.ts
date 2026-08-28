@@ -12,11 +12,8 @@ import {
   getTransaction,
   simulate,
 } from './tx.js'
-import { KeyedMutex } from '../../utils/mutex.js'
-import { AppError, ErrorCode } from '../../utils/errors.js'
-
-/** 同一 (chain, address) 的批量任务串行，防 nonce 冲突 */
-const nonceMutex = new KeyedMutex()
+import { requireSingleSigner, serializePerSigner } from '../nonce.js'
+import { evmNonceManager } from './nonce.js'
 
 const trimSlash = (url: string): string => url.replace(/\/$/, '')
 
@@ -44,8 +41,7 @@ export const evmAdapter: ChainAdapter = {
     reset: resetProviders,
 
     /**
-     * 批量执行：整批在一个 nonce 锁内跑完。
-     * 基准 nonce 每批现读链上 pending 值（不用本地缓存），只有节点接受才推进。
+     * 批量执行。序号管理走统一契约（lib/web3/nonce.ts），各链族一致。
      */
     executeBatch(
       chain: Chain,
@@ -56,25 +52,19 @@ export const evmAdapter: ChainAdapter = {
     ): Promise<readonly BatchItemResult[]> {
       if (items.length === 0) return Promise.resolve([])
 
-      const addresses = new Set(items.map((item) => getAddress(item.request.fromAddress)))
-      if (addresses.size !== 1) {
-        throw new AppError(ErrorCode.INTERNAL, '一批交易必须来自同一个签名地址')
-      }
-      const from = [...addresses][0]!
+      const from = requireSingleSigner(items, getAddress)
 
-      return nonceMutex.runExclusive(`${chain.key}:${from.toLowerCase()}`, async () => {
-        const baseNonce = await getProvider(chain).getTransactionCount(from, 'pending')
-        let offset = 0
+      return serializePerSigner(chain.key, from, async () => {
+        const nonce = await evmNonceManager(getProvider(chain), from, chain.key)
+        for (const warning of nonce.warnings) hooks?.onWarning?.(warning)
 
         const strategy: BatchStrategy = {
-          nextSequence: () => baseNonce + offset,
-          commitSequence: () => {
-            offset += 1
-          },
+          nextSequence: () => nonce.next(),
+          commitSequence: () => nonce.commit(),
           simulate: (item) => simulate(chain, item.request),
           build: (item, sequence) => buildUnsigned(chain, item.request, sequence!),
           broadcast: (signed) => broadcast(chain, signed),
-          // 等回执 → 查状态 → 没变就翻倍 gas 同 nonce 重发
+          // 等回执 → 查状态 → 没变就翻倍 gas 同 nonce 重发 → 还不行就自转账让出 nonce
           settle: (item, hash, sequence) =>
             confirmWithEscalation({ chain, item, hash, nonce: sequence ?? 0, sign }),
         }

@@ -18,7 +18,20 @@ const MULTICALL3_ABI = [
 ]
 
 const iface = new Interface(PAUSABLE_ABI)
+
+/**
+ * Multicall3 的规范地址，**每条链都一样** —— 它用确定性部署，
+ * 所以在几乎所有 EVM 链上都落在这个地址，不需要按链配置。
+ * 没部署的链由运行时发现：调一个没有代码的地址会失败，自动回退到单点调用。
+ */
+const MULTICALL3 = '0xcA11bde05977b3631167028862bE2a173976CA11'
 const TRON_CONCURRENCY = 5
+
+/** 一次读：某个合约的某个字段 */
+type Call = { id: string; key: 'paused' | 'owner'; target: string }
+
+const decode = (key: 'paused' | 'owner', data: string): unknown =>
+  iface.decodeFunctionResult(key, data)[0]
 
 /** 按链分组并行读。返回 contractId → 状态 */
 export async function readStates(
@@ -53,40 +66,56 @@ export async function readStates(
 
 async function readEvm(chain: Chain, contracts: ContractDef[]): Promise<Map<string, ContractState>> {
   const provider = new JsonRpcProvider(chain.rpcs[0], chain.chainId, { staticNetwork: true })
-  const states = new Map<string, ContractState>()
 
   const calls = contracts.flatMap((contract) => [
     { id: contract.id, key: 'paused' as const, target: contract.address },
     { id: contract.id, key: 'owner' as const, target: contract.address },
   ])
 
-  const decode = (key: 'paused' | 'owner', data: string): unknown =>
-    iface.decodeFunctionResult(key, data)[0]
-
-  if (chain.multicall3) {
-    const multicall = new Contract(chain.multicall3, MULTICALL3_ABI, provider)
-    const raw = (await multicall.aggregate3!.staticCall(
-      calls.map((call) => ({
-        target: call.target,
-        allowFailure: true, // 单个合约 revert 不能拖垮整批
-        callData: iface.encodeFunctionData(call.key),
-      })),
-    )) as [boolean, string][]
-
-    calls.forEach((call, index) => {
-      const entry = raw[index]
-      if (!entry?.[0]) return
-      const state = states.get(call.id) ?? {}
-      try {
-        states.set(call.id, { ...state, [call.key]: decode(call.key, entry[1]) })
-      } catch {
-        /* 解码失败就当读不到 */
-      }
-    })
-    return states
+  try {
+    return await readViaMulticall(provider, calls)
+  } catch {
+    // 这条链没部署 Multicall3，或者节点不支持 —— 退回并发单点调用，别整条链读不到
+    return readOneByOne(provider, calls)
   }
+}
 
-  // 没部署 Multicall3 → 回退并发单点调用
+/** 收集结果：一个合约的两个字段合到同一条状态上 */
+function collect(states: Map<string, ContractState>, call: Call, data: string): void {
+  try {
+    states.set(call.id, { ...(states.get(call.id) ?? {}), [call.key]: decode(call.key, data) })
+  } catch {
+    /* 解码失败就当读不到 */
+  }
+}
+
+async function readViaMulticall(
+  provider: JsonRpcProvider,
+  calls: Call[],
+): Promise<Map<string, ContractState>> {
+  const states = new Map<string, ContractState>()
+  const multicall = new Contract(MULTICALL3, MULTICALL3_ABI, provider)
+
+  const raw = (await multicall.aggregate3!.staticCall(
+    calls.map((call) => ({
+      target: call.target,
+      allowFailure: true, // 单个合约 revert 不能拖垮整批
+      callData: iface.encodeFunctionData(call.key),
+    })),
+  )) as [boolean, string][]
+
+  calls.forEach((call, index) => {
+    const entry = raw[index]
+    if (entry?.[0]) collect(states, call, entry[1])
+  })
+  return states
+}
+
+async function readOneByOne(
+  provider: JsonRpcProvider,
+  calls: Call[],
+): Promise<Map<string, ContractState>> {
+  const states = new Map<string, ContractState>()
   await Promise.all(
     calls.map(async (call) => {
       try {
@@ -94,7 +123,7 @@ async function readEvm(chain: Chain, contracts: ContractDef[]): Promise<Map<stri
           to: call.target,
           data: iface.encodeFunctionData(call.key),
         })
-        states.set(call.id, { ...(states.get(call.id) ?? {}), [call.key]: decode(call.key, data) })
+        collect(states, call, data)
       } catch {
         /* 忽略单点失败 */
       }

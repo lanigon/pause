@@ -150,7 +150,7 @@ async function run(operation: OperationKind) {
           <el-table-column label="链" width="150">
             <template #default="{ row }: { row: Contract }">
               <el-tag size="small" effect="plain">
-                {{ store.chainOf(row.chain)?.name ?? row.chain }}
+                {{ row.chain }}
               </el-tag>
             </template>
           </el-table-column>

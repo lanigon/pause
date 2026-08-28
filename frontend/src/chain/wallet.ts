@@ -92,7 +92,7 @@ const evmWallet: WalletAdapter = {
         params: [
           {
             chainId: chainIdHex,
-            chainName: chain.name,
+            chainName: chain.key,
             rpcUrls: chain.rpcs,
             blockExplorerUrls: [chain.explorer],
             nativeCurrency: { name: chain.symbol, symbol: chain.symbol, decimals: chain.decimals },

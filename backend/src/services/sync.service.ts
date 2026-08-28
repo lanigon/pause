@@ -210,9 +210,9 @@ function resolveChain(
     return chain
   }
 
-  // 没填 chainId 就退回按名字匹配 —— 认 key，也认 chains.json 里的显示名
+  // 没填 chainId 就退回按链名匹配 —— 要正好等于 chains.json 的 key
   const label = record.chain.trim().toLowerCase()
-  const chain = byKey.get(label) ?? [...byKey.values()].find((c) => c.name.toLowerCase() === label)
+  const chain = byKey.get(label)
   if (!chain) return `没填 chainId，链名「${record.chain}」也匹配不上 chains.json 里的任何一条链`
   return chain
 }

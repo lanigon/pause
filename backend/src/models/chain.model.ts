@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { chainType, evmAddress, identifier } from './primitives.js'
+import { chainType, identifier } from './primitives.js'
 
 /**
  * chains.json —— 链的静态配置。
@@ -10,16 +10,14 @@ import { chainType, evmAddress, identifier } from './primitives.js'
 
 /** chains.json 里的一行：chainId / name / explorer 这些静态配置 */
 export const chainSchema = z.object({
+  /** 唯一标识，同时也是展示用的名字 —— 再配一个 name 只是同一件事写两遍 */
   key: identifier,
-  name: z.string().min(1),
   type: chainType,
   chainId: z.number().int().positive(),
   explorer: z.string().url(),
-  confirmations: z.number().int().min(0).max(64),
+  /** 原生币符号。key 给不了这个信息（morph 上是 ETH，bsc 上是 BNB） */
   symbol: z.string().min(1).max(12),
   decimals: z.number().int().min(0).max(18),
-  /** 前端 multicall 用；无部署填 null，回退并发单调 */
-  multicall3: evmAddress.nullable().default(null),
 })
 
 export type Chain = z.infer<typeof chainSchema>
