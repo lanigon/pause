@@ -55,12 +55,12 @@ beforeAll(async () => {
   await writeFile(join(dir, 'signers.json'), JSON.stringify([
     { chainType: 'evm', address: EVM_ADDR, unlock: 'passphrase' },
   ]))
-  await writeFile(join(dir, 'rpc.json'), JSON.stringify({
-    syncedAt: '', lark: {}, chainlist: { morph: ['https://rpc.morphl2.io'] },
-  }))
-
   const { rpcProvider } = await import('../src/lib/rpc/rpcProvider.js')
-  await rpcProvider.load(dir, '')
+  // RPC 直接传结构，不用落盘 —— provider 不读文件
+  rpcProvider.load(
+    { syncedAt: '', lark: {}, chainlist: { morph: ['https://rpc.morphl2.io'] } },
+    '',
+  )
   const { loadRegistry } = await import('../src/services/registry.service.js')
   await loadRegistry(dir)
   const { createApp } = await import('../src/app.js')

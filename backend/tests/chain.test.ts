@@ -72,9 +72,10 @@ describe('★ bool 严格解码', () => {
     expect(() => decodeCall('paused', '0x01')).toThrow()
   })
 
-  it('非 bool 返回值不受这条限制（address 该怎样还怎样）', () => {
-    const addr = `0x${'0'.repeat(24)}${'11'.repeat(20)}`
-    expect(decodeCall('owner', addr)).toBe('0x1111111111111111111111111111111111111111')
+  it('★ ABI 里没有的方法要当场抛错 —— 读取字段写错名字必须立刻暴露', () => {
+    // 静默返回 undefined 的话，状态会显示"未知"，看着像 RPC 挂了，
+    // 实际是我们自己把方法名写错了，能查很久
+    expect(() => decodeCall('owner', '0x')).toThrow(/unknown function/)
   })
 })
 

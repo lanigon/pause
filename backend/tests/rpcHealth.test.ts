@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { RpcProvider } from '../src/lib/rpc/rpcProvider.js'
 import type { Chain } from '../src/models/chain.model.js'
-import { mkdtemp, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 
 /**
  * RPC 探活。
@@ -21,14 +18,10 @@ const CHAIN = {
   decimals: 18,
 } as Chain
 
-async function providerWith(urls: string[]): Promise<RpcProvider> {
-  const dir = await mkdtemp(join(tmpdir(), 'rpc-'))
-  await writeFile(
-    join(dir, 'rpc.json'),
-    JSON.stringify({ syncedAt: '2026-01-01T00:00:00Z', lark: { morph: urls }, chainlist: {} }),
-  )
+function providerWith(urls: string[]): RpcProvider {
   const provider = new RpcProvider()
-  await provider.load(dir, '') // 不带 Alchemy，避免混入别的来源
+  // 不带 Alchemy，避免混入别的来源
+  provider.load({ syncedAt: '2026-01-01T00:00:00Z', lark: { morph: urls }, chainlist: {} }, '')
   return provider
 }
 
@@ -42,7 +35,7 @@ const probe = (alive: Record<string, boolean>, latency: Record<string, number> =
 
 describe('探活结果影响候选顺序', () => {
   it('★ 死的降到最后，但不删 —— 删了可能一个都不剩', async () => {
-    const provider = await providerWith(['https://a', 'https://b', 'https://c'])
+    const provider = providerWith(['https://a', 'https://b', 'https://c'])
     await provider.probeAll([CHAIN], probe({ 'https://a': false, 'https://b': true, 'https://c': true }))
 
     const urls = provider.urlsFor(CHAIN)
@@ -51,7 +44,7 @@ describe('探活结果影响候选顺序', () => {
   })
 
   it('活的之间按延迟排 —— 快的先用，少触发 FallbackProvider 的重试', async () => {
-    const provider = await providerWith(['https://slow', 'https://fast'])
+    const provider = providerWith(['https://slow', 'https://fast'])
     await provider.probeAll(
       [CHAIN],
       probe({ 'https://slow': true, 'https://fast': true }, { 'https://slow': 900, 'https://fast': 30 }),
@@ -61,23 +54,22 @@ describe('探活结果影响候选顺序', () => {
   })
 
   it('★ 一条链全探失败时忽略本次结果 —— 那多半是我们自己出不去网', async () => {
-    const provider = await providerWith(['https://a', 'https://b'])
+    const provider = providerWith(['https://a', 'https://b'])
     const before = [...provider.urlsFor(CHAIN)]
 
     await provider.probeAll([CHAIN], probe({ 'https://a': false, 'https://b': false }))
 
-    // 顺序没变，也没有被标成死的
+    // 顺序原封不动 —— 一个都没被降权
     expect(provider.urlsFor(CHAIN)).toEqual(before)
-    expect(provider.healthOf('https://a')).toBeUndefined()
   })
 
   it('没探过时保持来源优先级顺序，不乱动', async () => {
-    const provider = await providerWith(['https://first', 'https://second'])
+    const provider = providerWith(['https://first', 'https://second'])
     expect(provider.urlsFor(CHAIN)).toEqual(['https://first', 'https://second'])
   })
 
   it('探活函数自己抛错也不能影响服务', async () => {
-    const provider = await providerWith(['https://a'])
+    const provider = providerWith(['https://a'])
     await expect(
       provider.probeAll([CHAIN], async () => {
         throw new Error('网络炸了')
@@ -86,23 +78,34 @@ describe('探活结果影响候选顺序', () => {
     expect(provider.urlsFor(CHAIN)).toEqual(['https://a'])
   })
 
-  it('健康摘要能报出各有几个 —— 运维要看得见哪条链在裸奔', async () => {
-    const provider = await providerWith(['https://a', 'https://b', 'https://c'])
-    await provider.probeAll([CHAIN], probe({ 'https://a': true, 'https://b': false }))
+  it('★ 没探过的排在活的后面、死的前面 —— 不确定好过已知不可用', async () => {
+    const provider = providerWith(['https://dead', 'https://unknown', 'https://alive'])
+    // 只探了其中两个，unknown 那个没被探到
+    await provider.probeAll([CHAIN], probe({ 'https://dead': false, 'https://alive': true }))
 
-    expect(provider.healthSummary(CHAIN)).toEqual({ alive: 1, dead: 1, unknown: 1 })
+    expect(provider.urlsFor(CHAIN)).toEqual(['https://alive', 'https://unknown', 'https://dead'])
   })
 
-  it('重新 load 之后探活结果作废 —— 换了配置，旧结论不作数', async () => {
-    const provider = await providerWith(['https://a', 'https://b'])
+  it('★ 重新 load 之后探活结果作废 —— 换了配置，旧结论不作数', async () => {
+    const provider = providerWith(['https://a', 'https://b'])
     await provider.probeAll([CHAIN], probe({ 'https://a': false, 'https://b': true }))
-    expect(provider.healthOf('https://a')?.alive).toBe(false)
+    expect(provider.urlsFor(CHAIN)).toEqual(['https://b', 'https://a']) // a 被降权了
 
-    const dir = await mkdtemp(join(tmpdir(), 'rpc2-'))
-    await writeFile(join(dir, 'rpc.json'), JSON.stringify({ syncedAt: '', lark: {}, chainlist: {} }))
-    await provider.load(dir, '')
+    provider.load({ syncedAt: '', lark: { morph: ['https://a', 'https://b'] }, chainlist: {} }, '')
 
-    expect(provider.healthOf('https://a')).toBeUndefined()
+    // 回到来源优先级的原始顺序
+    expect(provider.urlsFor(CHAIN)).toEqual(['https://a', 'https://b'])
+  })
+
+  it('公开与私有分得清 —— 含密钥的绝不下发前端', () => {
+    const provider = new RpcProvider()
+    provider.load(
+      { syncedAt: '', lark: { morph: ['https://node/?apikey=secret', 'https://plain'] }, chainlist: {} },
+      '',
+    )
+
+    expect(provider.urlsFor(CHAIN)).toHaveLength(2)
+    expect(provider.publicUrlsFor(CHAIN)).toEqual(['https://plain'])
   })
 })
 

@@ -243,7 +243,7 @@ async function checkAlchemy(chains: ChainDef[]): Promise<void> {
     return
   }
 
-  const { alchemyUrlFor } = await import('../src/lib/rpc/sources.js')
+  const { alchemyUrlFor } = await import('../src/lib/rpc/endpoint.js')
 
   for (const chain of chains) {
     const url = alchemyUrlFor(chain.chainId, key)

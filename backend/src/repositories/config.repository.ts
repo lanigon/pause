@@ -9,7 +9,8 @@ import {
 import type { BusinessLine, ContractDef } from '../models/contract.model.js'
 import type { Chain } from '../models/chain.model.js'
 import type { Operator } from '../models/operator.model.js'
-import { readText, fileExists } from '../lib/utils/jsonFile.js'
+import { readText, readJson, fileExists } from '../lib/utils/jsonFile.js'
+import { EMPTY_RPC_FILE, type RpcFile } from '../lib/rpc/endpoint.js'
 import { AppError, ErrorCode } from '../lib/utils/errors.js'
 
 /**
@@ -112,3 +113,13 @@ export async function loadRawConfig(configDir: string = env.DATA_DIR): Promise<R
     configVersion: configVersionOf(chainsFile.raw, contractsFile.raw, operatorsFile.raw),
   }
 }
+
+/**
+ * 读 data/rpc.json。
+ *
+ * 文件读写归 repository 管 —— lib/rpc 只负责"这条链能用哪些 RPC"，
+ * 不该自己去碰文件系统。将来换成数据库时也只改这里。
+ * 没有这个文件不算错：还没跑过 npm run sync 而已，返回空结构照常启动。
+ */
+export const readRpcFile = (dataDir: string = env.DATA_DIR): Promise<RpcFile> =>
+  readJson<RpcFile>(join(resolve(dataDir), 'rpc.json'), EMPTY_RPC_FILE)

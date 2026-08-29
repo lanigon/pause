@@ -17,7 +17,7 @@ process.env.LOG_LEVEL ??= 'silent'
 import { spawn } from 'node:child_process'
 import { stat } from 'node:fs/promises'
 import { env } from '../src/config/env.js'
-import { loadRawConfig } from '../src/repositories/config.repository.js'
+import { loadRawConfig, readRpcFile } from '../src/repositories/config.repository.js'
 import { hasCommand } from '../src/lib/lark/client.js'
 import { GpgKey, LOW_PIN_RETRIES, gpgBinary, gpgEnv, readCardStatus } from '../src/lib/keys/gpg.js'
 import { rpcProvider } from '../src/lib/rpc/rpcProvider.js'
@@ -150,7 +150,7 @@ async function checkData(): Promise<void> {
     report('ok', '密钥覆盖', `${[...used].join('、')} 都有密钥`)
   }
 
-  await rpcProvider.load()
+  rpcProvider.load(await readRpcFile(), env.ALCHEMY_API_KEY)
   const syncedAt = rpcProvider.syncedAt
   if (!syncedAt) {
     report('warn', 'RPC 数据', '从未同步过', 'npm run sync')

@@ -7,12 +7,17 @@ import type {
   ReadResult,
   SignPayloadFn,
 } from '../lib/web3/types.js'
-import { CONTRACT_READS, PAUSED_READ } from '../lib/web3/abi.js'
 import { meta, tx } from '../lib/web3/chains.js'
 import { SigningAbortedError } from '../lib/web3/runner.js'
 import type { ContractDef } from '../models/contract.model.js'
 import type { OperationKind } from './operations.js'
-import { expectedPausedState, labelOf, requiredPausedState } from './operations.js'
+import {
+  CONTRACT_READS,
+  PAUSED_READ,
+  expectedPausedState,
+  labelOf,
+  requiredPausedState,
+} from './operations.js'
 import type { AuthContext } from '../services/auth.service.js'
 import { contractsOf, getChain, getContract } from '../services/registry.service.js'
 import { AppError, ErrorCode } from '../lib/utils/errors.js'
@@ -90,7 +95,6 @@ export interface ContractState {
   readonly chainKey: string
   /** 主状态：列表里的 Active / Paused 标签看它。读不到为 undefined */
   readonly paused?: boolean
-  readonly owner?: string
   readonly fetchedAt: number
 }
 
@@ -146,7 +150,7 @@ export function assertAuthorized(params: {
 
 /**
  * 批量读合约链上状态。按链分组交给各自 adapter —— EVM 走 Multicall3 一次 RPC 读完，
- * Tron 走受限并发。读什么是固定的（paused / owner），配置里不用声明。
+ * Tron 走受限并发。读什么是固定的（只有 paused），配置里不用声明。
  */
 export async function readStates(
   contractIds: readonly string[],
@@ -199,12 +203,10 @@ async function readChainGroup(
 
   return contracts.map((contract): ContractState => {
     const paused = byId.get(`${contract.id}::paused`)
-    const owner = byId.get(`${contract.id}::owner`)
     return {
       contractId: contract.id,
       chainKey,
       paused: paused?.success && typeof paused.value === 'boolean' ? paused.value : undefined,
-      owner: owner?.success && typeof owner.value === 'string' ? owner.value : undefined,
       fetchedAt,
     }
   })

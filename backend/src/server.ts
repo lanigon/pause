@@ -2,6 +2,7 @@ import { createApp } from './app.js'
 import { env, isProduction } from './config/env.js'
 import { getRegistry, loadRegistry } from './services/registry.service.js'
 import { rpcProvider } from './lib/rpc/rpcProvider.js'
+import { readRpcFile } from './repositories/config.repository.js'
 import * as logRepo from './repositories/log.repository.js'
 import { abortAll } from './services/batch.service.js'
 import { resetAll, tx } from './lib/web3/index.js'
@@ -34,7 +35,7 @@ async function probeRpcs(): Promise<void> {
 
 async function main(): Promise<void> {
   // 顺序不能反：registry 校验链定义时会用到 RPC 来源
-  await rpcProvider.load()
+  rpcProvider.load(await readRpcFile(), env.ALCHEMY_API_KEY)
   const registry = await loadRegistry()
   await logRepo.init()
 

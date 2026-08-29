@@ -1,7 +1,7 @@
 import { Contract, FallbackProvider, Interface, JsonRpcProvider, Network, type Provider } from 'ethers'
 import type { Chain } from '../../../models/chain.model.js'
 import type { HealthResult, ReadCall, ReadResult } from '../types.js'
-import { PAUSABLE_ABI } from '../abi.js'
+import { PAUSABLE_ABI } from './abi.js'
 import { rpcProvider } from '../../rpc/rpcProvider.js'
 import { logger } from '../../utils/logger.js'
 import { redactRpcUrl, withTimeout } from '../../utils/net.js'

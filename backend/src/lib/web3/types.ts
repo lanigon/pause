@@ -1,5 +1,4 @@
 import type { Chain } from '../../models/chain.model.js'
-import type { AbiFragment } from './abi.js'
 
 /* ════════════════════════ 链族 ════════════════════════ */
 
@@ -172,4 +171,4 @@ export interface BatchOptions {
   readonly signal?: AbortSignal
 }
 
-export type { Chain, AbiFragment }
+export type { Chain }

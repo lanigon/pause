@@ -36,9 +36,11 @@ async function write(over: Partial<typeof base> = {}) {
   await writeFile(join(dir, 'chains.json'), JSON.stringify(merged.chains), 'utf8')
   await writeFile(join(dir, 'contracts.json'), JSON.stringify(merged.contracts), 'utf8')
   await writeFile(join(dir, 'operators.json'), JSON.stringify(merged.operators), 'utf8')
-  await writeFile(join(dir, 'rpc.json'), JSON.stringify({ syncedAt: '', lark: {}, chainlist: { morph: ['https://m'], tron: ['https://t'] } }), 'utf8')
-  // rpc.json 写完才加载，否则 provider 读到的是空的
-  await rpcProvider.load(dir, '')
+  // RPC 直接传结构，不用落盘 —— provider 不读文件
+  rpcProvider.load(
+    { syncedAt: '', lark: {}, chainlist: { morph: ['https://m'], tron: ['https://t'] } },
+    '',
+  )
 }
 
 beforeEach(async () => {
