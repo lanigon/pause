@@ -21,6 +21,18 @@ export async function getLogs(req: Request, res: Response): Promise<void> {
   ok(res, await logRepo.query(validated<z.infer<typeof logQuerySchema>>(req)))
 }
 
+/** 日期选择器用：这段时间里每天各有几笔交易 */
+export const logDailySchema = z.object({
+  from: z.string().datetime().optional(),
+  to: z.string().datetime().optional(),
+  /** 浏览器的 getTimezoneOffset()，东八区是 -480 */
+  offsetMinutes: z.coerce.number().int().min(-840).max(840).default(0),
+})
+
+export async function getDailyCounts(req: Request, res: Response): Promise<void> {
+  ok(res, await logRepo.dailyCounts(validated<z.infer<typeof logDailySchema>>(req)))
+}
+
 /**
  * 钱包模式下前端上报一条 —— **广播成功之后才报**，没发出去的不记。
  * 地址由后端从 JWT 填，请求体里的任何身份字段都会被忽略。

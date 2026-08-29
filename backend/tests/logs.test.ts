@@ -204,3 +204,57 @@ describe('按时间窗查（日志按天看）', () => {
     expect(page.total).toBe(0)
   })
 })
+
+describe('每日笔数（日期选择器的角标）', () => {
+  it('★ 按交易哈希去重 —— GPG 一笔交易写两条，不去重日历上的数会翻倍', async () => {
+    await seed([
+      // 同一笔交易：广播时一条、确认后一条
+      { ts: '2026-08-29T03:00:00.000Z', hash: '0xsame' },
+      { ts: '2026-08-29T03:00:05.000Z', hash: '0xsame' },
+      { ts: '2026-08-29T04:00:00.000Z', hash: '0xother' },
+    ])
+    const repo = await load()
+
+    expect(await repo.dailyCounts({ offsetMinutes: 0 })).toEqual({ '2026-08-29': 2 })
+  })
+
+  it('★ 按本地日历日分组 —— 同一条记录在不同时区落在不同天', async () => {
+    // UTC 8/29 20:00 = 北京 8/30 04:00
+    await seed([{ ts: '2026-08-29T20:00:00.000Z', hash: '0xlate' }])
+    const repo = await load()
+
+    expect(await repo.dailyCounts({ offsetMinutes: 0 })).toEqual({ '2026-08-29': 1 })
+    expect(await repo.dailyCounts({ offsetMinutes: -480 })).toEqual({ '2026-08-30': 1 })
+  })
+
+  it('时间窗外的不计', async () => {
+    await seed([
+      { ts: '2026-07-01T00:00:00.000Z', hash: '0xold' },
+      { ts: '2026-08-29T00:00:00.000Z', hash: '0xnew' },
+    ])
+    const repo = await load()
+
+    const counts = await repo.dailyCounts({
+      from: '2026-08-01T00:00:00.000Z',
+      to: '2026-09-01T00:00:00.000Z',
+      offsetMinutes: 0,
+    })
+    expect(counts).toEqual({ '2026-08-29': 1 })
+  })
+
+  it('时间戳坏掉的不计入任何一天，也不炸', async () => {
+    await seed([
+      { ts: 'not-a-date', hash: '0xbad' },
+      { ts: '2026-08-29T00:00:00.000Z', hash: '0xgood' },
+    ])
+    const repo = await load()
+
+    expect(await repo.dailyCounts({ offsetMinutes: 0 })).toEqual({ '2026-08-29': 1 })
+  })
+
+  it('没有记录时返回空对象', async () => {
+    await seed([])
+    const repo = await load()
+    expect(await repo.dailyCounts({ offsetMinutes: 0 })).toEqual({})
+  })
+})

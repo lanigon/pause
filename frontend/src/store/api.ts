@@ -111,6 +111,21 @@ export const getLogs = (range?: { from: string; to: string }, limit = 500) => {
   return request<{ items: OperationLog[]; total: number }>(`/logs?${params}`)
 }
 
+/**
+ * 每天各有几笔交易，给日期选择器打角标用。
+ *
+ * 传浏览器的时区偏移让后端按**本地日历日**分组 —— 和日志列表同一套口径，
+ * 不然日历上标的数和点进去看到的对不上。
+ */
+export const getDailyCounts = (range: { from: string; to: string }) => {
+  const params = new URLSearchParams({
+    from: range.from,
+    to: range.to,
+    offsetMinutes: String(new Date().getTimezoneOffset()),
+  })
+  return request<Record<string, number>>(`/logs/daily?${params}`)
+}
+
 /** 钱包模式下广播成功后上报。地址与时间由后端从 JWT 填 */
 export const postLog = (input: {
   operation: string

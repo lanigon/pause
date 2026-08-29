@@ -80,6 +80,47 @@ export function recordSafe(address: string, input: OperationLogInput): void {
 }
 
 /**
+ * 每天有几笔交易，给日期选择器用。
+ *
+ * **按交易哈希去重**：GPG 模式下一笔交易会写两条（广播时、确认后），
+ * 直接数行数的话日历上显示 58、点进去只有 5 条，对不上就没人信这个数了。
+ * 前端列表也是按哈希去重显示的，两边必须用同一套口径。
+ *
+ * 时区由调用方给：offsetMinutes 就是浏览器的 getTimezoneOffset()
+ * （东八区是 -480）。后端不做时区推断，只按这个数把 UTC 挪成本地日历日。
+ */
+export async function dailyCounts(q: {
+  readonly from?: string
+  readonly to?: string
+  readonly offsetMinutes: number
+}): Promise<Record<string, number>> {
+  const all = await store.all()
+  const seen = new Set<string>()
+  const counts: Record<string, number> = {}
+
+  for (const item of all) {
+    const at = Date.parse(item.ts)
+    if (Number.isNaN(at)) continue
+    if (q.from && at < Date.parse(q.from)) continue
+    if (q.to && at >= Date.parse(q.to)) continue
+
+    const day = localDay(at, q.offsetMinutes)
+    // 同一笔交易在同一天只算一次
+    const key = `${day}|${item.hash || item.contract + item.ts}`
+    if (seen.has(key)) continue
+    seen.add(key)
+
+    counts[day] = (counts[day] ?? 0) + 1
+  }
+  return counts
+}
+
+/** UTC 毫秒 → 本地日历日 YYYY-MM-DD */
+function localDay(at: number, offsetMinutes: number): string {
+  return new Date(at - offsetMinutes * 60_000).toISOString().slice(0, 10)
+}
+
+/**
  * 时间戳解析不出来的**不过滤掉**。
  * 藏起来的话，运维会以为交易没发出去 —— 宁可多显示一条脏数据。
  */

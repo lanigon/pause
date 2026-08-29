@@ -39,6 +39,7 @@ router.post('/gpg/cancel', requireWriteRole, gpg.postCancel)
 
 // 操作日志：启动时 GET，每次操作 POST
 router.get('/logs', validateQuery(log.logQuerySchema), asyncHandler(log.getLogs))
+router.get('/logs/daily', validateQuery(log.logDailySchema), asyncHandler(log.getDailyCounts))
 router.post('/logs', validateBody(log.logInputSchema), asyncHandler(log.postLog))
 
 // 系统状态

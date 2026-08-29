@@ -44,3 +44,21 @@ export function shiftDay(day: string, days: number): string {
 
 /** 这天在未来吗（未来的日子没有日志可看，按钮该禁掉） */
 export const isFuture = (day: string): boolean => day > today()
+
+/** 某个月的第一天，YYYY-MM（用来给计数做缓存 key） */
+export const monthOf = (day: string): string => day.slice(0, 7)
+
+/**
+ * 一个月的 UTC 时间窗，前后各多带一周。
+ *
+ * 多带是因为日历面板会把上月末、下月初的几天也画出来 ——
+ * 只拉本月的话那几格永远显示 0，看着像"那天没操作"，其实是没查。
+ */
+export function monthRange(month: string): { from: string; to: string } {
+  const [y, m] = month.split('-').map(Number)
+  const start = new Date(y ?? 1970, (m ?? 1) - 1, 1)
+  start.setDate(start.getDate() - 7)
+  const end = new Date(y ?? 1970, m ?? 1, 1)
+  end.setDate(end.getDate() + 7)
+  return { from: start.toISOString(), to: end.toISOString() }
+}

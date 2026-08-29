@@ -3,7 +3,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { useStore } from '../store'
 import { shorten } from '../chain/wallet'
 import type { OperationLog, TxLogStatus } from '../types'
-import { isFuture, shiftDay, today } from '../day'
+import { isFuture, monthOf, shiftDay, toDay, today } from '../day'
 
 /**
  * 交易日志：一笔交易一行，显示它**当前的**状态。
@@ -41,6 +41,14 @@ async function go(day: string): Promise<void> {
 
 const isToday = computed(() => store.logDay === today())
 const dayLabel = computed(() => (isToday.value ? '今天' : store.logDay))
+
+/** 日历格子上的笔数。0 不显示 —— 满屏的 0 比没有还吵 */
+const countOn = (date: Date): number => store.dailyCounts[toDay(date)] ?? 0
+
+/** 翻月时把那个月的计数补上 */
+function onPanelChange(date: Date): void {
+  void store.loadDailyCounts(monthOf(toDay(date)))
+}
 
 const STATUS: Readonly<
   Record<TxLogStatus, { label: string; type: 'success' | 'danger' | 'warning' | 'info' }>
@@ -112,7 +120,18 @@ const explorerUrl = (chain: string, hash: string): string => {
           :disabled-date="(d: Date) => d.getTime() > Date.now()"
           class="log__picker"
           @update:model-value="(d: string) => d && go(d)"
-        />
+          @panel-change="onPanelChange"
+        >
+          <!-- 格子上标出那天有几笔，一眼看出哪天动过 -->
+          <template #default="cell">
+            <div class="logcell" :class="{ 'logcell--has': countOn(cell.date) > 0 }">
+              <span>{{ cell.text }}</span>
+              <span v-if="countOn(cell.date) > 0" class="logcell__count">
+                {{ countOn(cell.date) }}
+              </span>
+            </div>
+          </template>
+        </el-date-picker>
 
         <el-button
           size="small"
@@ -224,5 +243,37 @@ const explorerUrl = (chain: string, hash: string): string => {
   color: var(--el-text-color-placeholder);
   text-align: center;
   padding: 40px 0;
+}
+</style>
+
+<!--
+  日历格子的样式不能 scoped —— el-date-picker 的浮层挂在 body 上，
+  scoped 生成的属性选择器够不着它。类名带 logcell 前缀避免撞车。
+-->
+<style>
+.logcell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.1;
+  height: 100%;
+}
+.logcell__count {
+  font-size: 10px;
+  color: var(--el-color-primary);
+  font-weight: 600;
+}
+/* 有操作的那天加个底色，扫一眼就知道哪几天动过 */
+.logcell--has {
+  background: var(--el-color-primary-light-9);
+  border-radius: 4px;
+}
+.el-date-table td.current .logcell--has,
+.el-date-table td.today .logcell--has {
+  background: transparent;
+}
+.el-date-table td.current .logcell__count {
+  color: #fff;
 }
 </style>

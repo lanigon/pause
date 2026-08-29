@@ -1,7 +1,7 @@
 import { computed, ref, shallowRef } from 'vue'
 import * as api from './api'
 import { readStates } from '../chain/multicall'
-import { dayRange, today } from '../day'
+import { dayRange, monthOf, monthRange, today } from '../day'
 import type { Session } from './session'
 import type {
   Chain,
@@ -30,6 +30,9 @@ export function useCatalog(session: Session) {
   const logs = ref<OperationLog[]>([])
   /** 日志看的是哪一天，YYYY-MM-DD（本地时区）。默认今天 */
   const logDay = ref<string>(today())
+  /** 每天有几笔交易，给日期选择器打角标。按月缓存，翻到哪个月拉哪个月 */
+  const dailyCounts = ref<Record<string, number>>({})
+  const loadedMonths = new Set<string>()
   const loading = ref(false)
   /** 本次加载时后端与 Lark 的同步进度 */
   const syncEvents = ref<SyncEvent[]>([])
@@ -168,6 +171,7 @@ export function useCatalog(session: Session) {
       if (selectedLines.value.size === 0 && reg.businessLines[0]) {
         selectedLines.value = new Set([reg.businessLines[0].id])
       }
+      void loadDailyCounts(monthOf(logDay.value))
       await refreshStates()
     } finally {
       loading.value = false
@@ -212,7 +216,23 @@ export function useCatalog(session: Session) {
   /** 换一天看日志。会重新去后端拉那一天 —— 本地筛的话选到没拉下来的日子就是空的 */
   async function setLogDay(day: string): Promise<void> {
     logDay.value = day
-    await reloadLogs()
+    await Promise.all([reloadLogs(), loadDailyCounts(monthOf(day))])
+  }
+
+  /**
+   * 拉某个月的每日笔数。已经拉过就不重复拉。
+   *
+   * 失败不抛 —— 这只是日历上的角标，没有它照样能选日期。
+   */
+  async function loadDailyCounts(month: string, force = false): Promise<void> {
+    if (!force && loadedMonths.has(month)) return
+    loadedMonths.add(month)
+    try {
+      const counts = await api.getDailyCounts(monthRange(month))
+      dailyCounts.value = { ...dailyCounts.value, ...counts }
+    } catch {
+      loadedMonths.delete(month) // 失败了下次还能重试
+    }
   }
 
   /**
@@ -221,7 +241,10 @@ export function useCatalog(session: Session) {
    * 不然会以为没记上。
    */
   async function jumpToToday(): Promise<void> {
-    await setLogDay(today())
+    const day = today()
+    logDay.value = day
+    // 刚写过日志，本月的计数要强制重拉，否则角标还是旧数
+    await Promise.all([reloadLogs(), loadDailyCounts(monthOf(day), true)])
   }
 
   /* ── 勾选 ── */
@@ -326,6 +349,8 @@ export function useCatalog(session: Session) {
     states.value = new Map()
     logs.value = []
     logDay.value = today()
+    dailyCounts.value = {}
+    loadedMonths.clear()
     selected.value = new Set()
     selectedLines.value = new Set()
     collapsedLines.value = new Set()
@@ -336,6 +361,7 @@ export function useCatalog(session: Session) {
     businessLines, chains, visibleContracts, selectedContracts, groups, allCollapsed, visibleSelection,
     chainOf, pausedCountOf, contractCountOf, canOperate,
     bootstrap, refreshStates, reloadLogs, logDay, setLogDay, jumpToToday,
+    dailyCounts, loadDailyCounts,
     toggleLine, toggle, toggleAll, selectByState, markContract, resetCatalog,
     toggleCollapse, setAllCollapsed, toggleLineSelection,
   }
