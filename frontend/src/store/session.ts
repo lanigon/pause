@@ -19,7 +19,11 @@ export function useSession() {
    */
   const wallets = ref<Record<ChainFamily, WalletAdapter | null>>(byFamily<WalletAdapter | null>(() => null))
   /** 签名模式：tab 切的就是这个 */
-  const mode = ref<SignMode>('gpg')
+  /**
+ * 默认钱包签名 —— 它是"用自己的钱包，签之前看得见"的那条路。
+ * GPG 走的是后端那把运维密钥，权限更大，要显式切过去才用。
+ */
+const mode = ref<SignMode>('wallet')
 
   /** 返回 true 表示这次连接完成了登录，调用方该去加载数据了 */
   async function connect(wallet: WalletAdapter, onDisconnect: () => void): Promise<boolean> {

@@ -96,8 +96,20 @@ export const getStates = (contractIds: string[]) =>
 
 /* ── 交易日志 ── */
 
-export const getLogs = (limit = 200) =>
-  request<{ items: OperationLog[]; total: number }>(`/logs?limit=${limit}`)
+/**
+ * 拉交易日志。
+ *
+ * 时间窗由调用方按**本地日历日**算好 —— 后端不认识时区。
+ * 不传就是不限时间（首次加载兜底用）。
+ */
+export const getLogs = (range?: { from: string; to: string }, limit = 500) => {
+  const params = new URLSearchParams({ limit: String(limit) })
+  if (range) {
+    params.set('from', range.from)
+    params.set('to', range.to)
+  }
+  return request<{ items: OperationLog[]; total: number }>(`/logs?${params}`)
+}
 
 /** 钱包模式下广播成功后上报。地址与时间由后端从 JWT 填 */
 export const postLog = (input: {

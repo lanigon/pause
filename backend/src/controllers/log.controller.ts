@@ -11,6 +11,9 @@ export const logQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(200),
   offset: z.coerce.number().int().min(0).default(0),
   address: z.string().optional(),
+  /** 时间窗 [from, to)。前端按本地日历日算好再传，后端不做时区推断 */
+  from: z.string().datetime().optional(),
+  to: z.string().datetime().optional(),
 })
 
 /** 前端启动时拉历史交易记录 */

@@ -3,6 +3,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { useStore } from '../store'
 import { shorten } from '../chain/wallet'
 import type { OperationLog, TxLogStatus } from '../types'
+import { isFuture, shiftDay, today } from '../day'
 
 /**
  * 交易日志：一笔交易一行，显示它**当前的**状态。
@@ -21,27 +22,29 @@ const autoScroll = ref(true)
 const body = ref<HTMLElement | null>(null)
 
 /**
- * 时间筛选。
+ * 日志按天看。
  *
- * 默认「全部」—— 紧急排查时先看到东西比先筛干净重要。
- * 快捷项覆盖最常见的问法（刚才那波、今天、最近三天），
- * 要精确到点的场景再切到自定义区间。
+ * 换天会**重新去后端拉那一天** —— 本地筛的话，选到没拉下来的日子就是一片空白，
+ * 而运维会以为那天什么都没发生。
  */
-type RangePreset = 'all' | '1h' | '24h' | '3d' | 'custom'
+const switching = ref(false)
 
-const RANGES: readonly { value: RangePreset; label: string; ms?: number }[] = [
-  { value: 'all', label: '全部' },
-  { value: '1h', label: '最近 1 小时', ms: 3_600_000 },
-  { value: '24h', label: '最近 24 小时', ms: 86_400_000 },
-  { value: '3d', label: '最近 3 天', ms: 259_200_000 },
-  { value: 'custom', label: '自定义…' },
-]
+async function go(day: string): Promise<void> {
+  if (switching.value || isFuture(day)) return
+  switching.value = true
+  try {
+    await store.setLogDay(day)
+  } finally {
+    switching.value = false
+  }
+}
 
-const range = ref<RangePreset>('all')
-/** [起, 止]，来自 el-date-picker */
-const customRange = ref<[Date, Date] | null>(null)
+const isToday = computed(() => store.logDay === today())
+const dayLabel = computed(() => (isToday.value ? '今天' : store.logDay))
 
-const STATUS: Readonly<Record<TxLogStatus, { label: string; type: 'success' | 'danger' | 'warning' | 'info' }>> = {
+const STATUS: Readonly<
+  Record<TxLogStatus, { label: string; type: 'success' | 'danger' | 'warning' | 'info' }>
+> = {
   confirmed: { label: '已确认', type: 'success' },
   failed: { label: '失败', type: 'danger' },
   broadcast: { label: '已广播', type: 'warning' },
@@ -61,36 +64,9 @@ const finalized = computed<OperationLog[]>(() => {
   return [...latest.values()]
 })
 
-/** 当前筛选的时间窗。null 表示不限 */
-const window = computed<{ from: number; to: number } | null>(() => {
-  if (range.value === 'all') return null
-
-  if (range.value === 'custom') {
-    const picked = customRange.value
-    // 自定义但还没选完时不筛 —— 别让列表先空一下
-    if (!picked?.[0] || !picked[1]) return null
-    return { from: picked[0].getTime(), to: picked[1].getTime() }
-  }
-
-  const ms = RANGES.find((r) => r.value === range.value)?.ms
-  return ms === undefined ? null : { from: Date.now() - ms, to: Number.MAX_SAFE_INTEGER }
-})
-
-const visible = computed<OperationLog[]>(() => {
-  const w = window.value
-  if (!w) return finalized.value
-  return finalized.value.filter((entry) => {
-    const at = new Date(entry.ts).getTime()
-    // 时间戳解析不出来的不藏 —— 宁可多显示一条，也别让运维以为交易没发出去
-    return Number.isNaN(at) || (at >= w.from && at <= w.to)
-  })
-})
-
-/** 被时间窗挡掉了几条，要让人看得见 */
-const hidden = computed(() => finalized.value.length - visible.value.length)
 
 watch(
-  () => visible.value.length,
+  () => finalized.value.length,
   async () => {
     if (!autoScroll.value) return
     await nextTick()
@@ -119,34 +95,43 @@ const explorerUrl = (chain: string, hash: string): string => {
   <div class="log">
     <div class="log__head">
       <span class="log__title">交易日志</span>
-      <el-tag size="small" type="info" effect="plain">{{ visible.length }}</el-tag>
+      <el-tag size="small" type="info" effect="plain">{{ finalized.length }}</el-tag>
 
-      <el-select v-model="range" size="small" class="log__range">
-        <el-option v-for="r in RANGES" :key="r.value" :label="r.label" :value="r.value" />
-      </el-select>
+      <div class="log__day">
+        <el-button size="small" text :disabled="switching" @click="go(shiftDay(store.logDay, -1))">
+          ‹
+        </el-button>
 
-      <el-date-picker
-        v-if="range === 'custom'"
-        v-model="customRange"
-        type="datetimerange"
-        size="small"
-        start-placeholder="起"
-        end-placeholder="止"
-        format="MM-DD HH:mm"
-        value-format="x"
-        :shortcuts="[]"
-        class="log__picker"
-      />
+        <el-date-picker
+          :model-value="store.logDay"
+          type="date"
+          size="small"
+          value-format="YYYY-MM-DD"
+          format="MM月DD日"
+          :clearable="false"
+          :disabled-date="(d: Date) => d.getTime() > Date.now()"
+          class="log__picker"
+          @update:model-value="(d: string) => d && go(d)"
+        />
 
-      <!-- 藏了多少要说出来，不然会以为交易没发出去 -->
-      <span v-if="hidden > 0" class="log__hidden">另有 {{ hidden }} 条不在时间范围内</span>
+        <el-button
+          size="small"
+          text
+          :disabled="switching || isToday"
+          @click="go(shiftDay(store.logDay, 1))"
+        >
+          ›
+        </el-button>
+
+        <el-button v-if="!isToday" size="small" text @click="go(today())">回到今天</el-button>
+      </div>
 
       <div class="log__spacer" />
       <el-checkbox v-model="autoScroll" size="small">自动滚动</el-checkbox>
     </div>
 
     <div ref="body" class="log__body">
-      <div v-for="entry in visible" :key="keyOf(entry)" class="log__row">
+      <div v-for="entry in finalized" :key="keyOf(entry)" class="log__row">
         <span class="log__time">{{ time(entry.ts) }}</span>
         <el-tag size="small" :type="STATUS[entry.status].type" effect="plain">
           {{ STATUS[entry.status].label }}
@@ -166,8 +151,8 @@ const explorerUrl = (chain: string, hash: string): string => {
         <span class="log__addr">{{ shorten(entry.address) }}</span>
       </div>
 
-      <div v-if="visible.length === 0" class="log__empty">
-        {{ finalized.length === 0 ? '暂无交易记录' : '这段时间内没有交易，换个时间范围看看' }}
+      <div v-if="finalized.length === 0" class="log__empty">
+        {{ dayLabel }}没有交易记录
       </div>
     </div>
   </div>
@@ -192,15 +177,13 @@ const explorerUrl = (chain: string, hash: string): string => {
   font-size: 13px;
   font-weight: 600;
 }
-.log__range {
-  width: 122px;
+.log__day {
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 .log__picker {
-  width: 300px;
-}
-.log__hidden {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
+  width: 128px;
 }
 .log__spacer {
   flex: 1;

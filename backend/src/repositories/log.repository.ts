@@ -7,6 +7,15 @@ import { logger } from '../lib/utils/logger.js'
 /* ── 查询契约。不是表的一部分，所以不在 models 里 ────────────────────── */
 
 export interface LogQuery {
+  /**
+   * 时间窗 [from, to)，ISO 字符串。
+   *
+   * **由前端算好传过来，后端不认识时区**。运维眼里的"今天"是本地日历日，
+   * 而 ts 存的是 UTC —— 后端按 UTC 切日的话，北京时间晚上八点之后的操作
+   * 会被算进"明天"，查当天记录时找不到自己刚做的事。
+   */
+  readonly from?: string
+  readonly to?: string
   readonly limit: number
   /** 偏移分页：从倒序结果的第几条开始 */
   readonly offset?: number
@@ -70,12 +79,25 @@ export function recordSafe(address: string, input: OperationLogInput): void {
   })
 }
 
+/**
+ * 时间戳解析不出来的**不过滤掉**。
+ * 藏起来的话，运维会以为交易没发出去 —— 宁可多显示一条脏数据。
+ */
+function matches(item: OperationLog, q: LogQuery): boolean {
+  if (q.address && item.address.toLowerCase() !== q.address.toLowerCase()) return false
+  if (!q.from && !q.to) return true
+
+  const at = Date.parse(item.ts)
+  if (Number.isNaN(at)) return true
+  if (q.from && at < Date.parse(q.from)) return false
+  if (q.to && at >= Date.parse(q.to)) return false
+  return true
+}
+
 /** 倒序分页：最新的在前 */
 export async function query(q: LogQuery): Promise<LogPage> {
   const all = await store.all()
-  const filtered = q.address
-    ? all.filter((item) => item.address.toLowerCase() === q.address!.toLowerCase())
-    : all
+  const filtered = all.filter((item) => matches(item, q))
 
   // 存储是追加序，倒过来就是时间倒序
   const descending = [...filtered].reverse()

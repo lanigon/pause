@@ -60,8 +60,8 @@ export function useExecution(catalog: Catalog, session: Session) {
       running.value = false
       abortController = null
       clearPending(ids)
-      // 无论成败都把链上状态和交易日志刷一遍
-      await Promise.all([catalog.refreshStates(), catalog.reloadLogs()])
+      // 无论成败都把链上状态和交易日志刷一遍；跳回今天才看得到刚做的
+      await Promise.all([catalog.refreshStates(), catalog.jumpToToday()])
     }
 
     // 成败以事件流为准 —— 后端把每个合约的终态都推过来了
@@ -153,7 +153,8 @@ export function useExecution(catalog: Catalog, session: Session) {
           })
         }
       }
-      await Promise.all([catalog.refreshStates(), catalog.reloadLogs()])
+      // 跳回今天：用户可能正翻着前几天的记录，不跳的话刚做的操作看不见
+      await Promise.all([catalog.refreshStates(), catalog.jumpToToday()])
       return { ok, failed: targets.length - ok }
     } finally {
       running.value = false

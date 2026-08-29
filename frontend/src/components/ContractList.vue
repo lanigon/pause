@@ -106,8 +106,8 @@ async function run(operation: OperationKind) {
     <!-- 顶部一行：签名方式 + 快捷勾选 + 已选 + 批量操作 -->
     <div class="list__bar">
       <el-radio-group v-model="store.mode" :disabled="store.running">
-        <el-radio-button value="gpg">GPG 批量</el-radio-button>
         <el-radio-button value="wallet">钱包签名</el-radio-button>
+        <el-radio-button value="gpg">GPG 批量</el-radio-button>
       </el-radio-group>
 
       <el-divider direction="vertical" />

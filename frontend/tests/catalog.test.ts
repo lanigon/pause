@@ -136,6 +136,7 @@ describe('勾选与派生', () => {
   it('★ 按状态快捷勾选时，状态未知的一律不勾', async () => {
     const s = await store()
     await s.bootstrap()
+    s.mode = 'gpg' // 默认是钱包模式，没连钱包时什么都勾不动；这里测的是勾选逻辑
     s.states = new Map([
       ['a', { paused: false }],
       ['b', { paused: true }],
@@ -155,6 +156,7 @@ describe('勾选与派生', () => {
   it('★ 只动本业务线 —— 别的业务线已勾的不能被冲掉', async () => {
     const s = await store()
     await s.bootstrap()
+    s.mode = 'gpg' // 默认是钱包模式，没连钱包时什么都勾不动；这里测的是勾选逻辑
     s.states = new Map([
       ['a', { paused: false }],
       ['c', { paused: false }],
@@ -173,6 +175,7 @@ describe('勾选与派生', () => {
   it('同一业务线内重复点会替换，不会越选越多', async () => {
     const s = await store()
     await s.bootstrap()
+    s.mode = 'gpg' // 默认是钱包模式，没连钱包时什么都勾不动；这里测的是勾选逻辑
     s.states = new Map([
       ['a', { paused: false }],
       ['b', { paused: true }],

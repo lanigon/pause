@@ -109,3 +109,98 @@ describe('查询', () => {
     expect(page).toEqual({ items: [], total: 0, nextOffset: null })
   })
 })
+
+/** 直接写 operations.json 造带指定时间戳的记录 —— record() 用的是当前时间 */
+async function seed(
+  entries: readonly { ts: string; hash: string; address?: string }[],
+): Promise<void> {
+  const { writeFile } = await import('node:fs/promises')
+  await writeFile(
+    join(dir, 'operations.json'),
+    JSON.stringify({
+      items: entries.map((e) => ({
+        operation: 'pause',
+        contract: 'vault',
+        chain: 'morph',
+        status: 'confirmed',
+        address: e.address ?? '0xAlice',
+        hash: e.hash,
+        ts: e.ts,
+      })),
+    }),
+  )
+}
+
+describe('按时间窗查（日志按天看）', () => {
+  it('★ 左闭右开 —— 一笔交易只能落进一天，不会同时出现在相邻两天', async () => {
+    await seed([
+      { ts: '2026-08-28T15:59:59.999Z', hash: '0xbefore' },
+      { ts: '2026-08-28T16:00:00.000Z', hash: '0xstart' },
+      { ts: '2026-08-29T15:59:59.999Z', hash: '0xlast' },
+      { ts: '2026-08-29T16:00:00.000Z', hash: '0xnext' },
+    ])
+    const repo = await load()
+
+    const page = await repo.query({
+      from: '2026-08-28T16:00:00.000Z',
+      to: '2026-08-29T16:00:00.000Z',
+      limit: 100,
+    })
+
+    expect(page.items.map((i) => i.hash).sort()).toEqual(['0xlast', '0xstart'])
+  })
+
+  it('不传时间窗就是全部', async () => {
+    await seed([
+      { ts: '2020-01-01T00:00:00.000Z', hash: '0xold' },
+      { ts: '2026-08-29T00:00:00.000Z', hash: '0xnew' },
+    ])
+    const repo = await load()
+
+    expect((await repo.query({ limit: 100 })).total).toBe(2)
+  })
+
+  it('★ 时间戳坏掉的不藏 —— 藏了运维会以为交易没发出去', async () => {
+    await seed([{ ts: 'not-a-date', hash: '0xbad' }])
+    const repo = await load()
+
+    const page = await repo.query({
+      from: '2026-08-29T00:00:00.000Z',
+      to: '2026-08-30T00:00:00.000Z',
+      limit: 100,
+    })
+
+    expect(page.items.map((i) => i.hash)).toEqual(['0xbad'])
+  })
+
+  it('时间窗和地址筛选叠加', async () => {
+    await seed([
+      { ts: '2026-08-29T03:00:00.000Z', hash: '0xa', address: '0xAlice' },
+      { ts: '2026-08-29T04:00:00.000Z', hash: '0xb', address: '0xBob' },
+    ])
+    const repo = await load()
+
+    const page = await repo.query({
+      from: '2026-08-29T00:00:00.000Z',
+      to: '2026-08-30T00:00:00.000Z',
+      address: '0xalice',
+      limit: 100,
+    })
+
+    expect(page.items.map((i) => i.hash)).toEqual(['0xa'])
+  })
+
+  it('那天没有记录时返回空，total 也是 0', async () => {
+    await seed([{ ts: '2026-08-29T03:00:00.000Z', hash: '0xa' }])
+    const repo = await load()
+
+    const page = await repo.query({
+      from: '2026-08-01T00:00:00.000Z',
+      to: '2026-08-02T00:00:00.000Z',
+      limit: 100,
+    })
+
+    expect(page.items).toEqual([])
+    expect(page.total).toBe(0)
+  })
+})

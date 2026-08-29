@@ -1,6 +1,7 @@
 import { computed, ref, shallowRef } from 'vue'
 import * as api from './api'
 import { readStates } from '../chain/multicall'
+import { dayRange, today } from '../day'
 import type { Session } from './session'
 import type {
   Chain,
@@ -27,6 +28,8 @@ export function useCatalog(session: Session) {
   const states = ref<Map<string, ContractState>>(new Map())
   /** 交易日志，来自后端。只含真实发出去的交易 */
   const logs = ref<OperationLog[]>([])
+  /** 日志看的是哪一天，YYYY-MM-DD（本地时区）。默认今天 */
+  const logDay = ref<string>(today())
   const loading = ref(false)
   /** 本次加载时后端与 Lark 的同步进度 */
   const syncEvents = ref<SyncEvent[]>([])
@@ -158,7 +161,7 @@ export function useCatalog(session: Session) {
             })
             return api.getRegistry()
           }),
-        api.getLogs(),
+        api.getLogs(dayRange(logDay.value)),
       ])
       registry.value = reg
       logs.value = log.items
@@ -203,7 +206,22 @@ export function useCatalog(session: Session) {
   }
 
   async function reloadLogs(): Promise<void> {
-    logs.value = (await api.getLogs()).items
+    logs.value = (await api.getLogs(dayRange(logDay.value))).items
+  }
+
+  /** 换一天看日志。会重新去后端拉那一天 —— 本地筛的话选到没拉下来的日子就是空的 */
+  async function setLogDay(day: string): Promise<void> {
+    logDay.value = day
+    await reloadLogs()
+  }
+
+  /**
+   * 刚做完操作要能立刻看见。
+   * 用户可能正翻着前几天的记录，这时候执行了一批 —— 自动跳回今天，
+   * 不然会以为没记上。
+   */
+  async function jumpToToday(): Promise<void> {
+    await setLogDay(today())
   }
 
   /* ── 勾选 ── */
@@ -307,6 +325,7 @@ export function useCatalog(session: Session) {
     syncResult.value = null
     states.value = new Map()
     logs.value = []
+    logDay.value = today()
     selected.value = new Set()
     selectedLines.value = new Set()
     collapsedLines.value = new Set()
@@ -316,7 +335,7 @@ export function useCatalog(session: Session) {
     registry, selectedLines, collapsedLines, selected, states, logs, loading, syncEvents, syncResult,
     businessLines, chains, visibleContracts, selectedContracts, groups, allCollapsed, visibleSelection,
     chainOf, pausedCountOf, contractCountOf, canOperate,
-    bootstrap, refreshStates, reloadLogs,
+    bootstrap, refreshStates, reloadLogs, logDay, setLogDay, jumpToToday,
     toggleLine, toggle, toggleAll, selectByState, markContract, resetCatalog,
     toggleCollapse, setAllCollapsed, toggleLineSelection,
   }
