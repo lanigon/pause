@@ -23,15 +23,22 @@ const connecting = ref<string | null>(null)
 const found = ref<Record<ChainFamily, readonly WalletAdapter[]>>(
   byFamily<readonly WalletAdapter[]>(() => []),
 )
-const scanning = ref(false)
+/**
+ * 按链族分别记「正在扫」。
+ *
+ * 以前是一个全局 flag：两个链族在 onMounted 里**并行**扫描，先结束的那个
+ * 会把 flag 置回 false，另一个还在 300ms 应答窗口里，下拉却已经显示
+ * 「没有检测到 xx 钱包」—— 装了钱包也会看到这句。
+ */
+const scanning = ref<Record<ChainFamily, boolean>>(byFamily(() => false))
 
 /** 装没装插件不是响应式的：进页面扫一次，每次点开按钮再扫一次 */
 async function scan(family: ChainFamily): Promise<void> {
-  scanning.value = true
+  scanning.value = { ...scanning.value, [family]: true }
   try {
     found.value = { ...found.value, [family]: await discoverWallets(family) }
   } finally {
-    scanning.value = false
+    scanning.value = { ...scanning.value, [family]: false }
   }
 }
 
@@ -97,7 +104,15 @@ async function connect(wallet: WalletAdapter): Promise<void> {
           </el-dropdown-item>
 
           <el-dropdown-item v-if="found[entry.family].length === 0" disabled>
-            {{ scanning ? '检测中…' : `没有检测到 ${entry.label} 钱包` }}
+            {{ scanning[entry.family] ? '检测中…' : `没有检测到 ${entry.label} 钱包` }}
+          </el-dropdown-item>
+
+          <!--
+            不参与登录的链族必须说清楚：连上后按钮同样会变绿，
+            不写的话用户会以为已经登录，然后发现什么数据都没加载。
+          -->
+          <el-dropdown-item v-if="!entry.signsIn" disabled divided>
+            <span class="wallet__note">仅用于发 {{ entry.label }} 交易，不参与登录</span>
           </el-dropdown-item>
         </el-dropdown-menu>
       </template>
@@ -122,6 +137,10 @@ async function connect(wallet: WalletAdapter): Promise<void> {
 .wallet__label {
   flex: 1;
   font-size: 14px;
+}
+.wallet__note {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 .bar {
   display: flex;

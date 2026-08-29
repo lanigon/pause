@@ -7,7 +7,7 @@ import type { ChainFamily, SignPayloadFn } from '../lib/web3/index.js'
 import type { ExecutionEvent } from './execution.service.js'
 import { getChain, getContract, getRegistry } from './registry.service.js'
 import { openSessions } from '../lib/keys/signer.js'
-import { keyFor, type LocalKey } from '../lib/keys/store.js'
+import { GpgKey } from '../lib/keys/gpg.js'
 import * as logRepo from '../repositories/log.repository.js'
 import { AppError, ErrorCode, badRequest } from '../lib/utils/errors.js'
 import { logger } from '../lib/utils/logger.js'
@@ -25,7 +25,7 @@ import { logger } from '../lib/utils/logger.js'
 export interface BatchPlan {
   readonly operation: OperationKind
   readonly contracts: readonly ContractDef[]
-  readonly signers: ReadonlyMap<ChainFamily, LocalKey>
+  readonly signers: ReadonlyMap<ChainFamily, SignerInfo>
   readonly actor: AuthContext
 }
 
@@ -87,11 +87,20 @@ export async function plan(params: {
   return { operation: params.operation, contracts, signers, actor: params.actor }
 }
 
+/** 链族 → 那把密钥声明的签名地址 */
+interface SignerInfo {
+  readonly family: ChainFamily
+  readonly address: string
+}
+
 /** 这批合约涉及哪些链族 → 各自的签名密钥。一次任务可以跨链、跨链族 */
-async function signersFor(contracts: readonly ContractDef[]): Promise<ReadonlyMap<ChainFamily, LocalKey>> {
+async function signersFor(contracts: readonly ContractDef[]): Promise<ReadonlyMap<ChainFamily, SignerInfo>> {
   const families = new Set(contracts.map((contract) => getChain(contract.chain).type))
   const entries = await Promise.all(
-    [...families].map(async (family) => [family, await keyFor(family)] as const),
+    [...families].map(async (family) => {
+      const key = await GpgKey.of(family)
+      return [family, { family, address: await key.address() }] as const
+    }),
   )
   return new Map(entries)
 }

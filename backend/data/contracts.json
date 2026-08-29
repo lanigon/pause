@@ -7,6 +7,18 @@
     {
       "id": "bridge",
       "name": "跨链桥"
+    },
+    {
+      "id": "lending",
+      "name": "借贷"
+    },
+    {
+      "id": "staking",
+      "name": "质押"
+    },
+    {
+      "id": "perp",
+      "name": "永续合约"
     }
   ],
   "contracts": [
@@ -23,6 +35,97 @@
       "businessLine": "payment",
       "chain": "tron",
       "address": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+    },
+    {
+      "id": "payment-router",
+      "name": "PaymentRouter",
+      "businessLine": "payment",
+      "chain": "morph",
+      "address": "0x5300000000000000000000000000000000000011"
+    },
+    {
+      "id": "payment-settlement",
+      "name": "SettlementVault",
+      "businessLine": "payment",
+      "chain": "morph",
+      "address": "0x5300000000000000000000000000000000000002"
+    },
+    {
+      "id": "bridge-l1-gateway",
+      "name": "L1StandardBridge",
+      "businessLine": "bridge",
+      "chain": "ethereum",
+      "address": "0xdC3d3d8a93CF3AAD3bA1c8f85cf960e0f0F4BE4b"
+    },
+    {
+      "id": "bridge-l2-gateway",
+      "name": "L2StandardBridge",
+      "businessLine": "bridge",
+      "chain": "morph",
+      "address": "0x5300000000000000000000000000000000000010"
+    },
+    {
+      "id": "bridge-messenger",
+      "name": "CrossDomainMessenger",
+      "businessLine": "bridge",
+      "chain": "morph",
+      "address": "0x5300000000000000000000000000000000000007"
+    },
+    {
+      "id": "lending-pool",
+      "name": "LendingPool",
+      "businessLine": "lending",
+      "chain": "morph",
+      "address": "0x5300000000000000000000000000000000000005"
+    },
+    {
+      "id": "lending-oracle",
+      "name": "PriceOracle",
+      "businessLine": "lending",
+      "chain": "polygon",
+      "address": "0x0000000000000000000000000000000000001010"
+    },
+    {
+      "id": "lending-liquidator",
+      "name": "Liquidator",
+      "businessLine": "lending",
+      "chain": "bsc",
+      "address": "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c"
+    },
+    {
+      "id": "staking-vault",
+      "name": "StakingVault",
+      "businessLine": "staking",
+      "chain": "morph",
+      "address": "0x5300000000000000000000000000000000000006"
+    },
+    {
+      "id": "staking-rewards",
+      "name": "RewardDistributor",
+      "businessLine": "staking",
+      "chain": "morph",
+      "address": "0x5300000000000000000000000000000000000008"
+    },
+    {
+      "id": "perp-clearing",
+      "name": "ClearingHouse",
+      "businessLine": "perp",
+      "chain": "morph",
+      "address": "0x5300000000000000000000000000000000000009"
+    },
+    {
+      "id": "perp-vault",
+      "name": "InsuranceFund",
+      "businessLine": "perp",
+      "chain": "bsc",
+      "address": "0x55d398326f99059fF775485246999027B3197955"
+    },
+    {
+      "id": "perp-funding",
+      "name": "FundingRateKeeper",
+      "businessLine": "perp",
+      "chain": "tron",
+      "address": "TKkeiboTkxXKJpbmVFbv4a8ov5rAfRDMf9"
     }
   ]
 }

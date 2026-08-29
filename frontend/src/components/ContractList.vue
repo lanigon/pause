@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox, type CheckboxValueType } from 'element-plus'
+import { ArrowDown } from '@element-plus/icons-vue'
 import { useStore } from '../store'
 import { shorten } from '../chain/wallet'
 import type { Contract, OperationKind } from '../types'
@@ -12,10 +13,9 @@ import type { Contract, OperationKind } from '../types'
  */
 const store = useStore()
 
+/** 判定逻辑在 store 里，和分组表头共用一份 */
 const allChecked = computed({
-  get: () =>
-    store.visibleContracts.length > 0 &&
-    store.selectedContracts.length === store.visibleContracts.filter(store.canOperate).length,
+  get: () => store.visibleSelection.allSelected,
   set: (value: boolean) => store.toggleAll(value),
 })
 
@@ -37,7 +37,19 @@ const explorerUrl = (contract: Contract): string => {
   return chain ? `${chain.explorer.replace(/\/$/, '')}/address/${contract.address}` : '#'
 }
 
-const canWrite = computed(() => store.operator?.role !== 'viewer')
+/**
+ * 未登录时必须是 false。
+ * 原来写的是 `store.operator?.role !== 'viewer'` —— operator 为 null 时
+ * `undefined !== 'viewer'` 成立，反而算成「有写权限」。
+ * 目前被 App.vue 的 v-if 挡着看不出来，但权限判断不该依赖调用点。
+ */
+const canWrite = computed(() => {
+  const operator = store.operator
+  return operator !== null && operator.role !== 'viewer'
+})
+
+/** 确认框里最多列几个合约，其余折成一句 —— 批量几十个时弹窗会撑出屏幕 */
+const CONFIRM_PREVIEW = 8
 
 async function run(operation: OperationKind) {
   const targets = store.selectedContracts
@@ -45,8 +57,15 @@ async function run(operation: OperationKind) {
 
   const label = operation === 'pause' ? '暂停' : '恢复'
   try {
+    const preview = targets
+      .slice(0, CONFIRM_PREVIEW)
+      .map((c) => `· ${c.name}（${c.chain}）`)
+      .join('\n')
+    const rest =
+      targets.length > CONFIRM_PREVIEW ? `\n· …另外 ${targets.length - CONFIRM_PREVIEW} 个` : ''
+
     await ElMessageBox.confirm(
-      `即将${label} ${targets.length} 个合约：\n${targets.map((c) => `· ${c.name}（${c.chain}）`).join('\n')}\n\n请输入 CONFIRM 确认`,
+      `即将${label} ${targets.length} 个合约：\n${preview}${rest}\n\n请输入 CONFIRM 确认`,
       `批量${label}`,
       {
         type: 'warning',
@@ -93,26 +112,25 @@ async function run(operation: OperationKind) {
 
       <el-divider direction="vertical" />
 
-      <el-checkbox v-model="allChecked" :disabled="store.running">全选</el-checkbox>
-
-      <el-button-group>
-        <el-button
-          :disabled="store.running || store.countByState(false) === 0"
-          @click="store.selectByState('needPause')"
-        >
-          需暂停（{{ store.countByState(false) }}）
-        </el-button>
-        <el-button
-          :disabled="store.running || store.countByState(true) === 0"
-          @click="store.selectByState('needResume')"
-        >
-          需恢复（{{ store.countByState(true) }}）
-        </el-button>
-      </el-button-group>
+      <el-checkbox
+        v-model="allChecked"
+        :indeterminate="store.visibleSelection.someSelected"
+        :disabled="store.running || store.visibleSelection.selectable === 0"
+      >
+        全选
+      </el-checkbox>
 
       <span class="list__selected">已选 {{ store.selectedContracts.length }}</span>
 
       <div class="list__spacer" />
+
+      <el-button
+        v-if="store.groups.length > 1"
+        text
+        @click="store.setAllCollapsed(!store.allCollapsed)"
+      >
+        {{ store.allCollapsed ? '全部展开' : '全部收起' }}
+      </el-button>
 
       <el-button :loading="store.running" @click="store.refreshStates">刷新状态</el-button>
       <el-button
@@ -134,11 +152,58 @@ async function run(operation: OperationKind) {
     <div class="list__groups">
       <div v-for="group in store.groups" :key="group.line.id" class="list__group">
         <div class="list__groupHead">
-          <span class="list__groupName">{{ group.line.name }}</span>
+          <!-- 只全选这条业务线，其余业务线已勾的保持不变 -->
+          <el-checkbox
+            :model-value="group.allSelected"
+            :indeterminate="group.someSelected"
+            :disabled="store.running || group.selectable === 0"
+            @change="(v: CheckboxValueType) => store.toggleLineSelection(group.line.id, v === true)"
+          />
+
+          <button
+            type="button"
+            class="list__groupToggle"
+            :aria-expanded="!group.collapsed"
+            @click="store.toggleCollapse(group.line.id)"
+          >
+            <el-icon class="list__caret" :class="{ 'list__caret--off': group.collapsed }">
+              <ArrowDown />
+            </el-icon>
+            <span class="list__groupName">{{ group.line.name }}</span>
+          </button>
+
           <el-tag size="small" type="info" effect="plain">{{ group.contracts.length }}</el-tag>
+
+          <!-- 折叠起来也看得到里面选了几个，避免误操作看不见的合约 -->
+          <el-tag v-if="group.selectedCount > 0" size="small" effect="plain">
+            已选 {{ group.selectedCount }}
+          </el-tag>
+
+          <div class="list__spacer" />
+
+          <!--
+            这条业务线自己的快捷勾选。只动本业务线，其余已勾的保持不变 ——
+            运维经常只想对某一条业务线下手，不该冲掉别处选好的。
+          -->
+          <el-button-group>
+            <el-button
+              size="small"
+              :disabled="store.running || group.needPause === 0"
+              @click.stop="store.selectByState('needPause', group.line.id)"
+            >
+              需暂停 {{ group.needPause }}
+            </el-button>
+            <el-button
+              size="small"
+              :disabled="store.running || group.needResume === 0"
+              @click.stop="store.selectByState('needResume', group.line.id)"
+            >
+              需恢复 {{ group.needResume }}
+            </el-button>
+          </el-button-group>
         </div>
 
-        <el-table :data="group.contracts" size="small">
+        <el-table v-show="!group.collapsed" :data="group.contracts" size="small">
           <el-table-column width="46">
             <template #default="{ row }: { row: Contract }">
               <el-checkbox
@@ -238,6 +303,24 @@ async function run(operation: OperationKind) {
   gap: 8px;
   font-size: 14px;
   font-weight: 600;
+}
+.list__groupToggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.list__caret {
+  color: var(--el-text-color-secondary);
+  transition: transform 0.2s ease;
+}
+.list__caret--off {
+  transform: rotate(-90deg);
 }
 .list__groupName {
   color: var(--el-text-color-primary);

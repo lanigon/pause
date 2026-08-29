@@ -27,10 +27,10 @@ import { dirname } from 'node:path'
 import { stdin, stdout } from 'node:process'
 import { Wallet } from 'ethers'
 import { utils as tronUtils } from 'tronweb'
-import { LOW_PIN_RETRIES } from '../src/lib/keys/card.js'
 import {
   UnlockMethod,
-  detectUnlock,
+  GpgKey,
+  LOW_PIN_RETRIES,
   decryptArgsWithSecret,
   isCardBlocked,
   encryptArgs,
@@ -317,7 +317,7 @@ async function cmdVerify(): Promise<void> {
   }
 
   // 解锁方式是探出来的（看密钥文件本身 + 卡在不在），不用配
-  const method = await detectUnlock(family)
+  const method = await (await GpgKey.of(family)).unlock()
   const needsTouch = needsTouchOf(method)
   const secretLabel = labelOf(method)
 
@@ -404,7 +404,7 @@ async function cmdStatus(): Promise<void> {
     console.log(
       `  ${family.padEnd(5)} ✅ 已配置   ${info.size} 字节  ${info.mtime.toISOString().slice(0, 19)}${warn}`,
     )
-    console.log(`        解锁方式: ${await detectUnlock(family)}（探测得出）`)
+    console.log(`        解锁方式: ${await (await GpgKey.of(family)).unlock()}（探测得出）`)
     console.log(`        声明地址: ${declared ?? '(缺失，重跑 keys encrypt 生成)'}`)
   }
   console.log('\n提示：status 不解密。用 keys verify 做完整校验。\n')
@@ -454,7 +454,7 @@ const firstLine = (text: string): string =>
 async function cmdDoctor(): Promise<void> {
   const family = await pickFamily()
   // 解锁方式是探出来的（看密钥文件本身 + 卡在不在），不用配
-  const method = await detectUnlock(family)
+  const method = await (await GpgKey.of(family)).unlock()
   const needsTouch = needsTouchOf(method)
   const secretLabel = labelOf(method)
 
@@ -496,7 +496,7 @@ async function cmdDoctor(): Promise<void> {
           '未检测到设备。若装了 pcscd，它会和 scdaemon 抢卡 —— 停掉 pcscd，或在 scdaemon.conf 里设 disable-ccid',
         )
       }
-      return `${card.reader ?? '未知读卡器'}  序列号 ${card.serial ?? '未知'}`
+      return `序列号 ${card.serial ?? '未知'}`
     })
 
     await step('卡上有解密密钥', async () => {
@@ -514,9 +514,6 @@ async function cmdDoctor(): Promise<void> {
       return `${left} 次`
     })
 
-    console.log(
-      `  ${'触摸策略'.padEnd(22)}${card.decryptTouchPolicy ?? '读不到（用 ykman openpgp info 查）'}`,
-    )
   }
 
   // ④ 密钥文件

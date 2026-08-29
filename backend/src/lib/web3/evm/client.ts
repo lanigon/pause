@@ -153,9 +153,15 @@ export async function checkHealth(chain: Chain, timeoutMs = 4_000): Promise<Heal
       const probe = new JsonRpcProvider(url, network, { staticNetwork: network })
       try {
         const blockNumber = await withTimeout(probe.getBlockNumber(), timeoutMs)
-        return { url: redactRpcUrl(url), ok: true, latencyMs: Date.now() - startedAt, blockNumber }
+        return { url: redactRpcUrl(url), rawUrl: url, ok: true, latencyMs: Date.now() - startedAt, blockNumber }
       } catch {
-        return { url: redactRpcUrl(url), ok: false, latencyMs: Date.now() - startedAt, blockNumber: null }
+        return {
+          url: redactRpcUrl(url),
+          rawUrl: url,
+          ok: false,
+          latencyMs: Date.now() - startedAt,
+          blockNumber: null,
+        }
       } finally {
         probe.destroy()
       }

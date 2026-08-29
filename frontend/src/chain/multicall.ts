@@ -29,6 +29,21 @@ type Call = { id: string; key: 'paused'; target: string }
 const decode = (key: 'paused', data: string): unknown =>
   iface.decodeFunctionResult(key, data)[0]
 
+/**
+ * bool 返回值必须是 32 字节的 0 或 1。
+ *
+ * 解码器会把**任何非零值**当成 true，但一个真正的 Pausable 合约只会返回 0 或 1。
+ * 返回别的东西说明这个地址根本不是我们以为的合约 —— 比如误配成了预编译地址
+ * 0x…0002，它对任意 calldata 都返回一个哈希，尾字节是 1 就会被读成「已暂停」。
+ *
+ * 紧急暂停时把「地址配错了」显示成「已暂停」是最坏的一种错：
+ * 运维会直接跳过这个合约。读不到（显示未知）远好过读错。
+ *
+ * 后端 lib/web3/evm/client.ts 的 decodeCall 与 tron/client.ts 的 decodeConstant
+ * 用的是同一条判定，三处必须一致。
+ */
+const isBoolWord = (data: string): boolean => /^0{63}[01]$/.test(data.replace(/^0x/, ''))
+
 /** 按链分组并行读。返回 contractId → 状态 */
 export async function readStates(
   chains: Chain[],
@@ -86,8 +101,9 @@ async function readEvm(chain: Chain, contracts: ContractDef[]): Promise<Map<stri
   }
 }
 
-/** 收集结果。解码失败就当没读到 —— 状态未知比状态错了安全 */
+/** 收集结果。解码失败或形状不对就当没读到 —— 状态未知比状态错了安全 */
 function collect(states: Map<string, ContractState>, call: Call, data: string): void {
+  if (!isBoolWord(data)) return
   try {
     states.set(call.id, { ...(states.get(call.id) ?? {}), paused: decode(call.key, data) === true })
   } catch {
@@ -140,7 +156,12 @@ async function readOneByOne(
 
 async function readTron(chain: Chain, contracts: ContractDef[]): Promise<Map<string, ContractState>> {
   const states = new Map<string, ContractState>()
-  const endpoint = `${chain.rpcs[0]?.replace(/\/$/, '')}/wallet/triggerconstantcontract`
+
+  // 没有 RPC 就直接返回：不加这道，下面会 fetch 到 "undefined/wallet/…"，
+  // 变成对本站的一次 404，每个合约都白跑一趟
+  const base = chain.rpcs[0]
+  if (!base) return states
+  const endpoint = `${base.replace(/\/$/, '')}/wallet/triggerconstantcontract`
 
   // 限流：TronGrid 有 QPS 限制
   for (let i = 0; i < contracts.length; i += TRON_CONCURRENCY) {
@@ -159,7 +180,10 @@ async function readTron(chain: Chain, contracts: ContractDef[]): Promise<Map<str
           })
           const body = (await res.json()) as { constant_result?: string[] }
           const hex = body.constant_result?.[0]
-          if (hex !== undefined) states.set(contract.id, { paused: /1$/.test(hex) })
+          // 原来是 /1$/ —— 任何以 1 结尾的返回都会被当成「已暂停」，太松
+          if (hex !== undefined && isBoolWord(hex)) {
+            states.set(contract.id, { paused: hex.replace(/^0x/, '').endsWith('1') })
+          }
         } catch {
           /* 忽略单个合约失败 */
         }

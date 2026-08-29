@@ -122,7 +122,16 @@ export function decodeError(result: { result?: { message?: string }; message?: s
 export { toSelector }
 
 export async function getBlockNumber(chain: Chain): Promise<number | null> {
-  const block = (await getClient(chain).trx.getCurrentBlock()) as {
+  return blockNumberOf(getClient(chain))
+}
+
+/** 探活用：指定某个 URL 单独问一次，不走缓存的首选客户端 */
+export async function getBlockNumberAt(url: string): Promise<number | null> {
+  return blockNumberOf(new TronWeb({ fullHost: url }))
+}
+
+async function blockNumberOf(client: TronWeb): Promise<number | null> {
+  const block = (await client.trx.getCurrentBlock()) as {
     block_header?: { raw_data?: { number?: number } }
   }
   return block.block_header?.raw_data?.number ?? null

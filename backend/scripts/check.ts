@@ -19,9 +19,7 @@ import { stat } from 'node:fs/promises'
 import { env } from '../src/config/env.js'
 import { loadRawConfig } from '../src/repositories/config.repository.js'
 import { hasCommand } from '../src/lib/lark/client.js'
-import { availableKeys, keyPathFor } from '../src/lib/keys/store.js'
-import { detectUnlock, gpgBinary, gpgEnv, readCardStatus } from '../src/lib/keys/gpg.js'
-import { LOW_PIN_RETRIES } from '../src/lib/keys/card.js'
+import { GpgKey, LOW_PIN_RETRIES, gpgBinary, gpgEnv, readCardStatus } from '../src/lib/keys/gpg.js'
 import { rpcProvider } from '../src/lib/rpc/rpcProvider.js'
 
 type Level = 'ok' | 'warn' | 'fail'
@@ -99,9 +97,9 @@ async function checkKeys(): Promise<void> {
     report('ok', 'YubiKey', `已插入${card.serial ? ` (${card.serial})` : ''}，PIN 剩 ${card.pinRetriesLeft ?? '?'} 次`)
   }
 
-  const keys = await availableKeys().catch((error: unknown) => {
+  const keys = await GpgKey.available().catch((error: unknown) => {
     report('fail', '密钥目录', error instanceof Error ? error.message : String(error))
-    return []
+    return [] as readonly GpgKey[]
   })
 
   if (keys.length === 0) {
@@ -109,15 +107,16 @@ async function checkKeys(): Promise<void> {
   }
 
   for (const key of keys) {
-    const info = await stat(keyPathFor(key.family))
+    const info = await stat(key.path)
     const mode = (info.mode & 0o777).toString(8)
-    const unlock = await detectUnlock(key.family).catch(() => '探测失败')
-
     if (mode !== '600') {
-      report('warn', `${key.family} 密钥`, `权限 ${mode}`, `chmod 600 ${keyPathFor(key.family)}`)
-    } else {
-      report('ok', `${key.family} 密钥`, `${key.address}  解锁方式 ${unlock}`)
+      report('warn', `${key.family} 密钥`, `权限 ${mode}`, `chmod 600 ${key.path}`)
+      continue
     }
+
+    const address = await key.address().catch((e: unknown) => (e as Error).message)
+    const unlock = await key.unlock().catch(() => '探测失败')
+    report('ok', `${key.family} 密钥`, `${address}  解锁方式 ${unlock}`)
   }
 }
 
@@ -138,7 +137,7 @@ async function checkData(): Promise<void> {
   )
 
   // 每条链的密钥有没有配齐 —— 合约在的链族必须有密钥，否则紧急时按不下去
-  const keys = new Set((await availableKeys().catch(() => [])).map((k) => k.family))
+  const keys = new Set((await GpgKey.available().catch(() => [])).map((k) => k.family))
   const used = new Set(
     config.contracts
       .map((c) => config.chains.find((chain) => chain.key === c.chain)?.type)

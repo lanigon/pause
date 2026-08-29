@@ -1,149 +1,195 @@
 import { spawn } from 'node:child_process'
-import { join, resolve } from 'node:path'
+import { readFile, readdir } from 'node:fs/promises'
 import { env } from '../../config/env.js'
-import { fileExists } from '../utils/jsonFile.js'
-import { KeyError, type KeyContext, type KeyProvider } from './provider.js'
-import { LOW_PIN_RETRIES, parseCardStatus, type CardStatus } from './card.js'
+import { AppError, ErrorCode, type ErrorCodeValue } from '../utils/errors.js'
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
- *  gpg —— 从本地 GPG 文件取密钥（目前唯一的 KeyProvider 实现）
+ *  本地 GPG 密钥
  * ═══════════════════════════════════════════════════════════════════════════
  *
- * 密钥文件路径按约定推导：secrets/<链族>.key.gpg，配置里不出现路径，
- * 也就不存在路径穿越的问题。
+ * 一把密钥就是 secrets/ 下的两个文件，路径固定，由 `npm run keys encrypt` 生成：
  *
- * 两种解锁方式，差别只在**要不要人在场**，其余完全一样：
+ *   secrets/<链族>.key.gpg    GPG 加密的私钥
+ *   secrets/<链族>.address    对应地址，明文
  *
- *              passphrase              yubikey
- *   文件形态    对称加密（AES256）        加密给卡上的 OpenPGP 公钥
- *   解锁        pinentry 问口令          pinentry 问 PIN + 触摸设备
- *   重试        可以                    连错 3 次锁卡，绝不自动重试
- *   超时        60s                    120s（留时间给人伸手）
- *   前置检查    文件在不在               还要查卡在不在、PIN 还剩几次
+ * 存地址是为了防掉包：解密后派生出来的地址必须和它一致。由加密脚本顺手写出，
+ * 没有人工填写的环节。路径固定也就不存在路径穿越。
  *
- * 两种方式都交给本机的 gpg-agent / pinentry —— 后端进程不持有任何口令。
- * 这也正是 YubiKey 本来的工作方式：插卡 → 输 PIN → 按一下。
+ * 私钥**只在子进程里出现**（见 worker.ts）。这个类在父进程里只做不碰私钥的事：
+ * 找密钥、读声明地址、探解锁方式、预检设备。
  */
-/** 要人触摸的解锁方式，超时得给足 */
-/**
- * 解锁方式。**不再是配置项，而是探出来的**。
- *
- * 以前在 signers.json 里手填，填错了不会报错只会行为怪异 ——
- * 现在直接看密钥文件本身（gpg --list-packets，不需要口令）加上卡在不在：
- *
- *   对称加密                    → 口令
- *   加密给公钥 + 卡在且有解密密钥 → YubiKey（要触摸、要独占、超时给足）
- *   加密给公钥 + 卡不在          → 口令（密钥在钥匙环里，gpg-agent 会问它的口令）
- *
- * 最后一条是配置做不到的：配置写死 yubikey 的话，卡拔了照样按 YubiKey 处理，
- * 白等 120 秒还提示用户去摸一个不存在的设备。
- */
-export enum UnlockMethod {
-  PASSPHRASE = 'passphrase',
-  YUBIKEY = 'yubikey',
-}
+export class GpgKey {
+  private constructor(
+    readonly family: string,
+    private readonly dir: string,
+  ) {}
 
-const TIMEOUT_MS: Readonly<Record<UnlockMethod, number>> = {
-  [UnlockMethod.PASSPHRASE]: 60_000,
-  [UnlockMethod.YUBIKEY]: 120_000,
-}
+  /* ── 找 ── */
 
-export const gpgBinary = (): string => env.GPG_BINARY
-
-/**
- * 密钥文件路径按约定推导。
- *   EVM  → <SECRETS_DIR>/evm.key.gpg
- *   Tron → <SECRETS_DIR>/tron.key.gpg
- */
-export function secretPathFor(family: string): string {
-  if (!/^[a-z][a-z0-9]*$/.test(family)) {
-    throw new KeyError('KEY_SOURCE_UNKNOWN', `非法的链族名: ${family}`)
-  }
-  return join(resolve(env.SECRETS_DIR), `${family}.key.gpg`)
-}
-
-export const secretExists = (family: string): Promise<boolean> => fileExists(secretPathFor(family))
-
-const unlockOf = (context: KeyContext): UnlockMethod =>
-  (context.options.unlock as UnlockMethod | undefined) ?? UnlockMethod.PASSPHRASE
-
-/** 密钥文件的加密形式只跟文件有关，探一次记住 */
-const encryptionForm = new Map<string, 'symmetric' | 'asymmetric'>()
-
-/** 探测某个链族的密钥怎么解锁。不需要口令 */
-export async function detectUnlock(family: string): Promise<UnlockMethod> {
-  const file = secretPathFor(family)
-
-  let form = encryptionForm.get(file)
-  if (!form) {
-    const packets = (await run(['--list-packets', file], 8_000)) ?? ''
-    // 对称加密的文件里是 symkey enc packet，加密给公钥的是 pubkey enc packet
-    form = packets.includes('symkey enc packet') ? 'symmetric' : 'asymmetric'
-    encryptionForm.set(file, form)
+  /** secrets/ 下有哪些链族的密钥。目录不存在就是一把都没有 */
+  static async available(dir: string = env.SECRETS_DIR): Promise<readonly GpgKey[]> {
+    const files = await readdir(dir).catch(() => [] as string[])
+    return files
+      .filter((name) => name.endsWith(KEY_SUFFIX))
+      .map((name) => new GpgKey(name.slice(0, -KEY_SUFFIX.length), dir))
+      .sort((a, b) => a.family.localeCompare(b.family))
   }
 
-  if (form === 'symmetric') return UnlockMethod.PASSPHRASE
-
-  // 加密给公钥：只有密钥真在卡上、卡也插着，才是 YubiKey 流程
-  const card = await readCardStatus().catch(() => ({ present: false, hasDecryptKey: false }))
-  return card.present && card.hasDecryptKey ? UnlockMethod.YUBIKEY : UnlockMethod.PASSPHRASE
-}
-
-const isCard = (context: KeyContext): boolean => unlockOf(context) === UnlockMethod.YUBIKEY
-
-/* ══ Provider 实现 ═══════════════════════════════════════════════════════ */
-
-export const gpgProvider: KeyProvider = {
-  kind: 'gpg',
-  label: '本地 GPG 密钥文件',
-
-  // 口令模式不用人管；卡模式要触摸
-  requiresPresence: isCard,
-  // 卡是独占的：scdaemon 锁住之后别的进程碰不了
-  requiresExclusiveDevice: isCard,
-
-  timeoutMs: (context) => TIMEOUT_MS[unlockOf(context)],
-
-  async check(context) {
-    if (!(await secretExists(context.family))) {
-      throw new KeyError('GPG_KEY_MISSING', `密钥文件不存在: secrets/${context.family}.key.gpg`)
+  static async of(family: string, dir: string = env.SECRETS_DIR): Promise<GpgKey> {
+    const key = (await GpgKey.available(dir)).find((k) => k.family === family)
+    if (!key) {
+      throw new KeyError(
+        ErrorCode.GPG_KEY_MISSING,
+        `没有 ${family} 链族的密钥。先跑 npm run keys encrypt 生成 ${dir}/${family}${KEY_SUFFIX}`,
+      )
     }
-    if (!isCard(context)) return
+    return key
+  }
 
-    /**
-     * 卡模式：先把卡的状态读出来。
-     * 能提前发现的问题就别等输错 PIN 才发现 —— 尤其是"只剩一两次"，
-     * 输错第三次卡就锁了，要 PUK 才能解，代价很高。
-     */
+  get path(): string {
+    return `${this.dir}/${this.family}${KEY_SUFFIX}`
+  }
+
+  get addressPath(): string {
+    return `${this.dir}/${this.family}.address`
+  }
+
+  /**
+   * 声明地址。解密后派生的地址必须与它一致，不一致说明密钥被换了。
+   *
+   * 缺这个文件不能放行 —— 没有它就没法核对身份，
+   * 等于把「密钥被掉包」这个检查静默关掉了。
+   */
+  async address(): Promise<string> {
+    const raw = await readFile(this.addressPath, 'utf8').catch(() => {
+      throw new KeyError(
+        ErrorCode.GPG_KEY_MISSING,
+        `${this.path} 存在但缺少 ${this.addressPath}。这个文件用于核对密钥有没有被换过，` +
+          '不能省。重跑 npm run keys encrypt 生成。',
+      )
+    })
+
+    const address = raw.trim()
+    if (!address) throw new KeyError(ErrorCode.GPG_KEY_MISSING, `${this.addressPath} 是空的`)
+    return address
+  }
+
+  /* ── 怎么解锁 ── */
+
+  /**
+   * 探测这把密钥怎么解锁。**不是配置项**。
+   *
+   * 看密钥文件本身（gpg --list-packets，不需要口令）加上卡在不在：
+   *   对称加密                    → 口令
+   *   加密给公钥 + 卡在且有解密密钥 → YubiKey（要触摸、要独占、超时给足）
+   *   加密给公钥 + 卡不在          → 口令（密钥在钥匙环里，gpg-agent 会问它的口令）
+   *
+   * 最后一条是配置做不到的：配置写死 yubikey 的话，卡拔了照样按 YubiKey 处理，
+   * 白等 120 秒还提示用户去摸一个不存在的设备。
+   */
+  async unlock(): Promise<UnlockMethod> {
+    let form = encryptionForm.get(this.path)
+    if (!form) {
+      const packets = (await run(['--list-packets', this.path], PROBE_TIMEOUT_MS)) ?? ''
+      form = packets.includes('symkey enc packet') ? 'symmetric' : 'asymmetric'
+      encryptionForm.set(this.path, form)
+    }
+    if (form === 'symmetric') return UnlockMethod.PASSPHRASE
+
+    const card = await readCardStatus().catch(() => ABSENT_CARD)
+    return card.present && card.hasDecryptKey ? UnlockMethod.YUBIKEY : UnlockMethod.PASSPHRASE
+  }
+
+  /** 要人去摸一下设备。同时意味着这把密钥独占 scdaemon，会话必须串行打开 */
+  async needsTouch(): Promise<boolean> {
+    return (await this.unlock()) === UnlockMethod.YUBIKEY
+  }
+
+  /**
+   * 开工前的预检。能提前发现的问题就别等输错 PIN 才发现 ——
+   * 尤其是"只剩一两次"，输错第三次卡就锁了，要 PUK 才能解，代价很高。
+   */
+  async check(): Promise<void> {
+    if (!(await this.exists())) {
+      throw new KeyError(ErrorCode.GPG_KEY_MISSING, `密钥文件不存在: ${this.path}`)
+    }
+    if (!(await this.needsTouch())) return
+
     const card = await readCardStatus()
-
-    if (!card.present) throw new KeyError('GPG_CARD_ABSENT', '未检测到 YubiKey，请插入设备')
+    if (!card.present) throw new KeyError(ErrorCode.GPG_CARD_ABSENT, '未检测到 YubiKey，请插入设备')
     if (card.pinRetriesLeft === 0) {
-      throw new KeyError('GPG_CARD_BLOCKED', 'PIN 已被锁定，需要用 PUK 解锁')
+      throw new KeyError(ErrorCode.GPG_CARD_BLOCKED, 'PIN 已被锁定，需要用 PUK 解锁')
     }
     if (!card.hasDecryptKey) {
-      throw new KeyError('GPG_CARD_NO_KEY', '卡上没有解密密钥，请先把密钥导入 YubiKey')
+      throw new KeyError(ErrorCode.GPG_CARD_NO_KEY, '卡上没有解密密钥，请先把密钥导入 YubiKey')
     }
     if (card.pinRetriesLeft !== undefined && card.pinRetriesLeft <= LOW_PIN_RETRIES) {
       throw new KeyError(
-        'GPG_CARD_LOW_RETRIES',
-        `PIN 只剩 ${card.pinRetriesLeft} 次尝试机会，再错就锁卡。请确认 PIN 无误后用 keys doctor 单独验证`,
+        ErrorCode.GPG_CARD_LOW_RETRIES,
+        `PIN 只剩 ${card.pinRetriesLeft} 次尝试机会，再错就锁卡。` +
+          '请确认 PIN 无误后用 npm run keys verify 单独验证',
       )
     }
-  },
+  }
 
-  async withKey(context, use) {
-    const plaintext = await decrypt(secretPathFor(context.family), TIMEOUT_MS[unlockOf(context)])
+  private exists(): Promise<boolean> {
+    return readFile(this.path).then(
+      () => true,
+      () => false,
+    )
+  }
+
+  /* ── 解密 ── */
+
+  /**
+   * 解密，把私钥交给回调，回调结束立即清零。
+   *
+   * **只在子进程里调**（worker.ts）—— 私钥的存活时间严格等于这个回调。
+   * 返回值只能是签名结果，绝不能是私钥本身。
+   */
+  async withKey<T>(use: (privateKeyHex: string) => T | Promise<T>): Promise<T> {
+    const timeoutMs = TIMEOUT_MS[await this.unlock()]
+    const plaintext = await decrypt(this.path, timeoutMs)
     try {
       return await use(normalize(plaintext))
     } finally {
       plaintext.fill(0)
     }
-  },
+  }
 }
 
-/* ══ gpg 调用 ════════════════════════════════════════════════════════════ */
+/* ══ 类型与常量 ══════════════════════════════════════════════════════════ */
+
+export enum UnlockMethod {
+  PASSPHRASE = 'passphrase',
+  YUBIKEY = 'yubikey',
+}
+
+/** YubiKey 要留时间给人伸手摸一下 */
+const TIMEOUT_MS: Readonly<Record<UnlockMethod, number>> = {
+  [UnlockMethod.PASSPHRASE]: 60_000,
+  [UnlockMethod.YUBIKEY]: 120_000,
+}
+
+const KEY_SUFFIX = '.key.gpg'
+const PROBE_TIMEOUT_MS = 8_000
+/** 剩这么少就该警告了 —— 再错就锁卡 */
+export const LOW_PIN_RETRIES = 2
+
+/** 加密形式只跟文件有关，探一次记住 */
+const encryptionForm = new Map<string, 'symmetric' | 'asymmetric'>()
+
+export class KeyError extends AppError {
+  constructor(code: ErrorCodeValue, message: string) {
+    super(code, message)
+    this.name = 'KeyError'
+  }
+}
+
+export const gpgBinary = (): string => env.GPG_BINARY
+
+/* ══ gpg 参数 ════════════════════════════════════════════════════════════ */
 
 /**
  * 服务端解密：**不带 loopback**。
@@ -181,21 +227,14 @@ export const encryptArgs = (recipient?: string): readonly string[] =>
         '--symmetric',
         '--cipher-algo',
         'AES256',
-        '--digest-algo',
-        'SHA512',
-        '--s2k-mode',
-        '3',
-        // 提高 KDF 迭代次数，抬高离线爆破成本
-        '--s2k-count',
-        '65011712',
         '--armor',
       ]
 
 /**
- * gpg 子进程的环境变量。
+ * 给 gpg 的环境变量，只留必需的。
  *
- * 只留必需的：PATH 找 gpg 与 scdaemon，HOME 是默认密钥环位置，
- * GNUPGHOME 是自定义密钥环（YubiKey 常用独立密钥环，**必须转发**，
+ * PATH 找 gpg 与 scdaemon，HOME 是默认密钥环位置，
+ * GNUPGHOME 是自定义密钥环（YubiKey 常用独立密钥环，**必须转发** ——
  * 不转发的话 gpg 会去找默认密钥环，永远解不开，而报错看起来像"口令错"）。
  * LC_ALL 固定英文输出，便于解析 stderr。
  */
@@ -208,6 +247,8 @@ export function gpgEnv(): NodeJS.ProcessEnv {
   if (process.env.GNUPGHOME) vars.GNUPGHOME = process.env.GNUPGHOME
   return vars
 }
+
+/* ══ 跑 gpg ══════════════════════════════════════════════════════════════ */
 
 function decrypt(file: string, timeoutMs: number): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -225,7 +266,7 @@ function decrypt(file: string, timeoutMs: number): Promise<Buffer> {
       if (settled) return
       settled = true
       killGroup(gpg.pid)
-      reject(new KeyError('GPG_TIMEOUT', '解密超时（YubiKey 可能在等触摸）'))
+      reject(new KeyError(ErrorCode.GPG_TIMEOUT, '解密超时（YubiKey 可能在等触摸）'))
     }, timeoutMs)
     timer.unref()
 
@@ -239,7 +280,7 @@ function decrypt(file: string, timeoutMs: number): Promise<Buffer> {
       if (settled) return
       settled = true
       clearTimeout(timer)
-      reject(new KeyError('GPG_DECRYPT_FAILED', `无法执行 gpg：${error.message}`))
+      reject(new KeyError(ErrorCode.GPG_DECRYPT_FAILED, `无法执行 gpg：${error.message}`))
     })
 
     gpg.on('close', (code) => {
@@ -259,11 +300,7 @@ function decrypt(file: string, timeoutMs: number): Promise<Buffer> {
   })
 }
 
-export async function readCardStatus(timeoutMs = 8_000): Promise<CardStatus> {
-  const output = await run(['--card-status'], timeoutMs)
-  return output === null ? { present: false, hasDecryptKey: false } : parseCardStatus(output)
-}
-
+/** 跑一条只读的 gpg 命令，失败返回 null（探测用，不该因此中断流程） */
 function run(args: readonly string[], timeoutMs: number): Promise<string | null> {
   return new Promise((resolve) => {
     const child = spawn(gpgBinary(), args, { stdio: ['ignore', 'pipe', 'pipe'], env: gpgEnv() })
@@ -289,6 +326,42 @@ function run(args: readonly string[], timeoutMs: number): Promise<string | null>
   })
 }
 
+/* ══ YubiKey 卡状态 ══════════════════════════════════════════════════════ */
+
+export interface CardStatus {
+  readonly present: boolean
+  readonly serial?: string
+  /** 用户 PIN 还能试几次。0 = 已锁死 */
+  readonly pinRetriesLeft?: number
+  readonly hasDecryptKey: boolean
+}
+
+const ABSENT_CARD: CardStatus = { present: false, hasDecryptKey: false }
+
+export async function readCardStatus(timeoutMs = PROBE_TIMEOUT_MS): Promise<CardStatus> {
+  const output = await run(['--card-status'], timeoutMs)
+  return output === null ? ABSENT_CARD : parseCardStatus(output)
+}
+
+/**
+ * 解析 `gpg --card-status`。
+ *
+ * `PIN retry counter : 3 0 3` —— 三个数分别是用户 PIN、重置码、Admin PIN。
+ * 第一个才是我们关心的（输错三次锁卡的那个）。
+ */
+export function parseCardStatus(output: string): CardStatus {
+  const serial = /Serial number\s*\.*:\s*(\S+)/i.exec(output)?.[1]
+  const retries = /PIN retry counter\s*\.*:\s*(\d+)\s+(\d+)\s+(\d+)/i.exec(output)
+  const encKey = /Encryption key\s*\.*:\s*(\S+)/i.exec(output)?.[1]
+
+  return {
+    present: /Reader\s*\.*:|Application ID\s*\.*:/i.test(output),
+    ...(serial ? { serial } : {}),
+    ...(retries?.[1] ? { pinRetriesLeft: Number.parseInt(retries[1], 10) } : {}),
+    hasDecryptKey: encKey !== undefined && encKey !== '[none]',
+  }
+}
+
 /* ══ 错误归类 ════════════════════════════════════════════════════════════ */
 
 /**
@@ -298,21 +371,21 @@ function run(args: readonly string[], timeoutMs: number): Promise<string | null>
 function classify(stderr: string): KeyError {
   if (isPinentryUnavailable(stderr)) {
     return new KeyError(
-      'GPG_PINENTRY_UNAVAILABLE',
+      ErrorCode.GPG_PINENTRY_UNAVAILABLE,
       'gpg-agent 无法弹出输入框 —— 后端可能是无终端后台运行的',
     )
   }
   if (isCardBlocked(stderr)) {
-    return new KeyError('GPG_CARD_BLOCKED', '设备已被锁定（PIN 连续输错次数过多）')
+    return new KeyError(ErrorCode.GPG_CARD_BLOCKED, '设备已被锁定（PIN 连续输错次数过多）')
   }
   const remaining = remainingPinAttempts(stderr)
   if (remaining !== null) {
     return new KeyError(
-      'GPG_WRONG_SECRET',
+      ErrorCode.GPG_WRONG_SECRET,
       `口令/PIN 错误，还剩 ${remaining} 次尝试${remaining <= 1 ? '（再错一次将锁定设备）' : ''}`,
     )
   }
-  return new KeyError('GPG_WRONG_SECRET', '口令/PIN 错误或密钥文件损坏')
+  return new KeyError(ErrorCode.GPG_WRONG_SECRET, '口令/PIN 错误或密钥文件损坏')
 }
 
 /** 从 stderr 提取还剩几次尝试。只取次数，不回显原文 */
@@ -339,7 +412,7 @@ export const isPinentryUnavailable = (stderr: string): boolean =>
 function normalize(raw: Buffer): string {
   const hex = raw.toString('utf8').trim().replace(/^0[xX]/, '')
   if (!/^[0-9a-fA-F]{64}$/.test(hex)) {
-    throw new KeyError('GPG_DECRYPT_FAILED', '解密结果不是合法私钥（可能解错了文件）')
+    throw new KeyError(ErrorCode.GPG_DECRYPT_FAILED, '解密结果不是合法私钥（可能解错了文件）')
   }
   return hex.toLowerCase()
 }

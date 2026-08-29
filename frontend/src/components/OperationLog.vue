@@ -2,22 +2,95 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { useStore } from '../store'
 import { shorten } from '../chain/wallet'
+import type { OperationLog, TxLogStatus } from '../types'
 
 /**
- * 操作日志。
- * **只显示交易的终态**（已确认 / 失败）—— 广播中这种中间态在上面的实时进度里看，
- * 日志要回答的是"最后到底成了没有"。
+ * 交易日志：一笔交易一行，显示它**当前的**状态。
+ *
+ * 之前这里只显示终态（confirmed / failed），有个后果：
+ * **钱包模式发出去的交易永远不出现在日志里**。钱包模式下前端只在广播成功后
+ * 上报一条 broadcast，此后没有任何东西会把它更新成 confirmed，
+ * 于是运维刚点完暂停，日志区却一直是「暂无交易记录」。
+ *
+ * 现在改成按交易哈希去重、保留最新的那条状态：
+ *   GPG 模式   后端会为同一笔写两条（广播时、确认后），去重后只留确认后的
+ *   钱包模式   只有 broadcast 一条，照常显示，标成「已广播」
  */
 const store = useStore()
 const autoScroll = ref(true)
 const body = ref<HTMLElement | null>(null)
 
-const finalized = computed(() =>
-  store.logs.filter((entry) => entry.status === 'confirmed' || entry.status === 'failed'),
-)
+/**
+ * 时间筛选。
+ *
+ * 默认「全部」—— 紧急排查时先看到东西比先筛干净重要。
+ * 快捷项覆盖最常见的问法（刚才那波、今天、最近三天），
+ * 要精确到点的场景再切到自定义区间。
+ */
+type RangePreset = 'all' | '1h' | '24h' | '3d' | 'custom'
+
+const RANGES: readonly { value: RangePreset; label: string; ms?: number }[] = [
+  { value: 'all', label: '全部' },
+  { value: '1h', label: '最近 1 小时', ms: 3_600_000 },
+  { value: '24h', label: '最近 24 小时', ms: 86_400_000 },
+  { value: '3d', label: '最近 3 天', ms: 259_200_000 },
+  { value: 'custom', label: '自定义…' },
+]
+
+const range = ref<RangePreset>('all')
+/** [起, 止]，来自 el-date-picker */
+const customRange = ref<[Date, Date] | null>(null)
+
+const STATUS: Readonly<Record<TxLogStatus, { label: string; type: 'success' | 'danger' | 'warning' | 'info' }>> = {
+  confirmed: { label: '已确认', type: 'success' },
+  failed: { label: '失败', type: 'danger' },
+  broadcast: { label: '已广播', type: 'warning' },
+  cancelled: { label: '已取消', type: 'info' },
+}
+
+/** 同一笔交易可能有多条记录，哈希是它的身份；缺哈希的退回时间+合约 */
+const keyOf = (entry: OperationLog): string => entry.hash || `${entry.ts}-${entry.contract}`
+
+const finalized = computed<OperationLog[]>(() => {
+  // store.logs 由后端按时间倒序给出，所以每个哈希**第一次**出现的就是最新那条
+  const latest = new Map<string, OperationLog>()
+  for (const entry of store.logs) {
+    const key = keyOf(entry)
+    if (!latest.has(key)) latest.set(key, entry)
+  }
+  return [...latest.values()]
+})
+
+/** 当前筛选的时间窗。null 表示不限 */
+const window = computed<{ from: number; to: number } | null>(() => {
+  if (range.value === 'all') return null
+
+  if (range.value === 'custom') {
+    const picked = customRange.value
+    // 自定义但还没选完时不筛 —— 别让列表先空一下
+    if (!picked?.[0] || !picked[1]) return null
+    return { from: picked[0].getTime(), to: picked[1].getTime() }
+  }
+
+  const ms = RANGES.find((r) => r.value === range.value)?.ms
+  return ms === undefined ? null : { from: Date.now() - ms, to: Number.MAX_SAFE_INTEGER }
+})
+
+const visible = computed<OperationLog[]>(() => {
+  const w = window.value
+  if (!w) return finalized.value
+  return finalized.value.filter((entry) => {
+    const at = new Date(entry.ts).getTime()
+    // 时间戳解析不出来的不藏 —— 宁可多显示一条，也别让运维以为交易没发出去
+    return Number.isNaN(at) || (at >= w.from && at <= w.to)
+  })
+})
+
+/** 被时间窗挡掉了几条，要让人看得见 */
+const hidden = computed(() => finalized.value.length - visible.value.length)
 
 watch(
-  () => finalized.value.length,
+  () => visible.value.length,
   async () => {
     if (!autoScroll.value) return
     await nextTick()
@@ -46,20 +119,37 @@ const explorerUrl = (chain: string, hash: string): string => {
   <div class="log">
     <div class="log__head">
       <span class="log__title">交易日志</span>
-      <el-tag size="small" type="info" effect="plain">{{ finalized.length }}</el-tag>
+      <el-tag size="small" type="info" effect="plain">{{ visible.length }}</el-tag>
+
+      <el-select v-model="range" size="small" class="log__range">
+        <el-option v-for="r in RANGES" :key="r.value" :label="r.label" :value="r.value" />
+      </el-select>
+
+      <el-date-picker
+        v-if="range === 'custom'"
+        v-model="customRange"
+        type="datetimerange"
+        size="small"
+        start-placeholder="起"
+        end-placeholder="止"
+        format="MM-DD HH:mm"
+        value-format="x"
+        :shortcuts="[]"
+        class="log__picker"
+      />
+
+      <!-- 藏了多少要说出来，不然会以为交易没发出去 -->
+      <span v-if="hidden > 0" class="log__hidden">另有 {{ hidden }} 条不在时间范围内</span>
+
       <div class="log__spacer" />
       <el-checkbox v-model="autoScroll" size="small">自动滚动</el-checkbox>
     </div>
 
     <div ref="body" class="log__body">
-      <div v-for="(entry, index) in finalized" :key="`${entry.ts}-${index}`" class="log__row">
+      <div v-for="entry in visible" :key="keyOf(entry)" class="log__row">
         <span class="log__time">{{ time(entry.ts) }}</span>
-        <el-tag
-          size="small"
-          :type="entry.status === 'confirmed' ? 'success' : 'danger'"
-          effect="plain"
-        >
-          {{ entry.status === 'confirmed' ? '已确认' : '失败' }}
+        <el-tag size="small" :type="STATUS[entry.status].type" effect="plain">
+          {{ STATUS[entry.status].label }}
         </el-tag>
         <span class="log__op">{{ entry.operation === 'pause' ? '暂停' : '恢复' }}</span>
         <span class="log__contract">{{ entry.contract }}</span>
@@ -76,7 +166,9 @@ const explorerUrl = (chain: string, hash: string): string => {
         <span class="log__addr">{{ shorten(entry.address) }}</span>
       </div>
 
-      <div v-if="finalized.length === 0" class="log__empty">暂无交易记录</div>
+      <div v-if="visible.length === 0" class="log__empty">
+        {{ finalized.length === 0 ? '暂无交易记录' : '这段时间内没有交易，换个时间范围看看' }}
+      </div>
     </div>
   </div>
 </template>
@@ -99,6 +191,16 @@ const explorerUrl = (chain: string, hash: string): string => {
 .log__title {
   font-size: 13px;
   font-weight: 600;
+}
+.log__range {
+  width: 122px;
+}
+.log__picker {
+  width: 300px;
+}
+.log__hidden {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 .log__spacer {
   flex: 1;

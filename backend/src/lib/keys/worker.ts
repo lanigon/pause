@@ -14,17 +14,14 @@
 import { Wallet, Transaction } from 'ethers'
 import { utils as tronUtils } from 'tronweb'
 import { EVM, TRON, type ChainFamily } from '../web3/types.js'
-import { providerOf, type KeyContext } from './provider.js'
+import { GpgKey } from './gpg.js'
 
 // ── 与父进程的 IPC 协议 ────────────────────────────────────────────────────
 
 export interface WorkerInit {
   readonly type: 'init'
   readonly family: ChainFamily
-  /** 密钥来源，默认 gpg。见 lib/keys/provider.ts */
-  readonly source?: string
   /** provider 自己的配置，如 GPG 的 unlock 方式 */
-  readonly options?: Readonly<Record<string, unknown>>
   /** 配置里声明的地址；派生出来的必须与它一致 */
   readonly expectedAddress: string
   readonly jobTimeoutMs: number
@@ -143,24 +140,19 @@ process.on('message', (message: WorkerRequest) => {
 })
 
 async function run(init: WorkerInit): Promise<void> {
-  const provider = providerOf(init.source)
-  const context: KeyContext = {
-    family: init.family,
-    expectedAddress: init.expectedAddress,
-    options: init.options ?? {},
-  }
+  const key = await GpgKey.of(init.family)
 
   try {
-    await provider.check(context)
+    await key.check()
 
     // 需要人去按设备的话，先告诉前端
-    if (provider.requiresPresence(context)) send({ type: 'awaiting-touch', label: provider.label })
+    if (await key.needsTouch()) send({ type: 'awaiting-touch', label: 'YubiKey' })
 
     /**
-     * 整个签名会话跑在回调里：密钥的存活时间就是这个回调的执行时间，
-     * 回调一结束 provider 立刻清零。父进程从头到尾看不到密钥材料。
+     * 整个签名会话跑在回调里：私钥的存活时间就是这个回调的执行时间，
+     * 回调一结束立刻清零。父进程从头到尾看不到密钥材料。
      */
-    await provider.withKey(context, async (keyHex) => {
+    await key.withKey(async (keyHex: string) => {
       const address = deriveAddress(init.family, keyHex)
 
       // 密钥被换过的检测点 —— 不一致立即中止，不给任何签名机会

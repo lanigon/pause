@@ -143,11 +143,43 @@ describe('勾选与派生', () => {
     ])
     s.toggleLine('bridge')
 
-    s.selectByState('needPause')
+    // a、b 都在 pay 业务线下
+    s.selectByState('needPause', 'pay')
     expect([...s.selected]).toEqual(['a'])
 
-    s.selectByState('needResume')
+    s.selectByState('needResume', 'pay')
     // 不确定的事情不替用户做决定 —— c 不在里面
+    expect([...s.selected]).toEqual(['b'])
+  })
+
+  it('★ 只动本业务线 —— 别的业务线已勾的不能被冲掉', async () => {
+    const s = await store()
+    await s.bootstrap()
+    s.states = new Map([
+      ['a', { paused: false }],
+      ['c', { paused: false }],
+    ])
+    s.toggleLine('bridge')
+
+    // 先在 bridge 里手动勾一个
+    s.toggle('c')
+    expect([...s.selected]).toEqual(['c'])
+
+    // 再点 pay 的「需暂停」—— c 必须还在
+    s.selectByState('needPause', 'pay')
+    expect([...s.selected].sort()).toEqual(['a', 'c'])
+  })
+
+  it('同一业务线内重复点会替换，不会越选越多', async () => {
+    const s = await store()
+    await s.bootstrap()
+    s.states = new Map([
+      ['a', { paused: false }],
+      ['b', { paused: true }],
+    ])
+
+    s.selectByState('needPause', 'pay')
+    s.selectByState('needResume', 'pay')
     expect([...s.selected]).toEqual(['b'])
   })
 })

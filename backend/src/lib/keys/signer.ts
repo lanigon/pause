@@ -3,8 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { env } from '../../config/env.js'
 import type { ChainFamily } from '../web3/types.js'
 import type { SignPayloadFn, UnsignedPayload } from '../web3/index.js'
-import { detectUnlock, type UnlockMethod } from './gpg.js'
-import { providerOf } from './provider.js'
+import { GpgKey } from './gpg.js'
 import type {
   WorkerInit,
   WorkerRequest,
@@ -27,6 +26,10 @@ import { logger } from '../utils/logger.js'
 /** dev 跑 .ts（tsx loader），prod 跑编译后的 .js */
 const RUNNING_FROM_SOURCE = import.meta.url.endsWith('.ts')
 
+/** 口令当场就输完；YubiKey 要留时间给人伸手 */
+const PASSPHRASE_TIMEOUT_MS = 60_000
+const TOUCH_TIMEOUT_MS = 120_000
+
 const workerPath = fileURLToPath(
   new URL(
     RUNNING_FROM_SOURCE ? './worker.ts' : './worker.js',
@@ -47,12 +50,10 @@ interface SigningSession {
 
 interface OpenSessionParams {
   readonly family: ChainFamily
-  /** operators.json 中声明的地址，解密结果必须与它一致 */
+  /** secrets/<链族>.address 里声明的地址，解密结果必须与它一致 */
   readonly expectedAddress: string
-  /** 解锁方式：passphrase 或 yubikey（gpg 来源专用） */
-  readonly unlock: UnlockMethod
-  /** 密钥来源，默认 gpg。见 lib/keys/provider.ts */
-  readonly source?: string
+  /** 要人摸设备（YubiKey）。会话得串行开，超时也要给足 */
+  readonly exclusive: boolean
   /** 整个批量任务的超时（含解密 + 全部签名） */
   readonly jobTimeoutMs?: number
   /** 需要物理触摸时的回调，用于向前端推"请触摸设备" */
@@ -221,9 +222,15 @@ export async function openSessions(
 ): Promise<ReadonlyMap<ChainFamily, SigningSession>> {
   const sessions = new Map<ChainFamily, SigningSession>()
 
-  // 解锁方式是探出来的（看密钥文件 + 卡在不在），不是配的
+  /**
+   * 要不要独占设备，是探出来的（看密钥文件 + 卡在不在），不是配的。
+   * 独占的必须串行打开 —— 同一张卡同时只能被一个进程访问（scdaemon 锁）。
+   */
   const resolved = await Promise.all(
-    targets.map(async (target) => ({ ...target, unlock: await detectUnlock(target.family) })),
+    targets.map(async (target) => {
+      const key = await GpgKey.of(target.family)
+      return { ...target, exclusive: await key.needsTouch() }
+    }),
   )
 
   const open = async (target: (typeof resolved)[number]): Promise<void> => {
@@ -235,8 +242,8 @@ export async function openSessions(
   }
 
   try {
-    const exclusive = resolved.filter((t) => needsExclusiveDevice(t))
-    const concurrent = resolved.filter((t) => !needsExclusiveDevice(t))
+    const exclusive = resolved.filter((t) => t.exclusive)
+    const concurrent = resolved.filter((t) => !t.exclusive)
 
     // 独占设备的一个一个来 —— 同一张卡同时只能被一个进程访问
     for (const target of exclusive) await open(target)
@@ -250,26 +257,13 @@ export async function openSessions(
   }
 }
 
-const needsExclusiveDevice = (target: { family: ChainFamily; unlock: UnlockMethod; source?: string }): boolean =>
-  providerOf(target.source).requiresExclusiveDevice({
-    family: target.family,
-    expectedAddress: '',
-    options: { unlock: target.unlock },
-  })
-
 /**
  * 打开签名会话：fork 子进程 → 流式送 passphrase → 解密 → 校验地址 → 就绪。
  * 解密失败、地址不匹配、超时都会在这里抛错，且子进程已被清理。
  */
 async function openSigningSession(params: OpenSessionParams): Promise<SigningSession> {
-  const provider = providerOf(params.source)
-  const context = {
-    family: params.family,
-    expectedAddress: params.expectedAddress,
-    options: { unlock: params.unlock },
-  }
   // 取密钥可能要等人按设备，整体超时至少要覆盖取密钥的窗口
-  const keyTimeoutMs = provider.timeoutMs(context)
+  const keyTimeoutMs = params.exclusive ? TOUCH_TIMEOUT_MS : PASSPHRASE_TIMEOUT_MS
   const jobTimeoutMs = Math.max(params.jobTimeoutMs ?? env.GPG_JOB_TIMEOUT_MS, keyTimeoutMs + 30_000)
   const child = fork(workerPath, [], {
     stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
@@ -295,9 +289,6 @@ async function openSigningSession(params: OpenSessionParams): Promise<SigningSes
     const init: WorkerInit = {
       type: 'init',
       family: params.family,
-      // 密钥来源可插拔，见 lib/keys/providers。默认解本地 GPG 文件
-      source: params.source,
-      options: { unlock: params.unlock },
       expectedAddress: params.expectedAddress,
       jobTimeoutMs,
     }

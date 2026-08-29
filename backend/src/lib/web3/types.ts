@@ -113,10 +113,16 @@ export interface TransactionSnapshot {
 }
 
 export interface HealthResult {
+  /** **脱敏后**的地址，只到 host —— 带 apiKey 的 RPC 不能整条露出去 */
   readonly url: string
   readonly ok: boolean
   readonly latencyMs: number
   readonly blockNumber: number | null
+  /**
+   * 原始地址，仅供进程内把结果对回具体节点（rpcProvider 的探活排序要用）。
+   * **绝不能出现在任何响应体或日志里** —— 下发前一律只取 url。
+   */
+  readonly rawUrl: string
 }
 
 /* ════════════════════════ 批量执行 ════════════════════════ */

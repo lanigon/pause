@@ -123,7 +123,12 @@ export async function getRpcHealth(_req: Request, res: Response): Promise<void> 
   const results = await Promise.all(
     chains.map(async (chain) => {
       try {
-        return { chain: chain.key, rpcs: await tx(chain.type).checkHealth(chain) }
+        const results = await tx(chain.type).checkHealth(chain)
+        // rawUrl 只在进程内用来对回节点，含 apiKey，**绝不下发**
+        return {
+          chain: chain.key,
+          rpcs: results.map(({ rawUrl: _rawUrl, ...safe }) => safe),
+        }
       } catch (error) {
         // 一条链没有可用 RPC 不该让整个接口挂掉，但要明确说出来
         return {

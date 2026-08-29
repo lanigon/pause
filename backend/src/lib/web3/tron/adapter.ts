@@ -3,7 +3,7 @@ import type { Chain } from '../../../models/chain.model.js'
 import type { BatchHooks, BatchItem, BatchItemResult, BatchOptions, HealthResult, ReadCall, ReadResult, SignPayloadFn } from '../types.js'
 import type { ChainAdapter } from '../ChainAdapter.js'
 import { runBatch, type BatchStrategy } from '../runner.js'
-import { constantCall, getBlockNumber, resetClients, toBase58, toHex41, READ_CONCURRENCY } from './client.js'
+import { constantCall, getBlockNumberAt, resetClients, toBase58, toHex41, READ_CONCURRENCY } from './client.js'
 import { broadcast, buildTransaction, getTransaction, waitForConfirmation } from './tx.js'
 import { redactRpcUrl, withTimeout } from '../../utils/net.js'
 import { rpcProvider } from '../../rpc/rpcProvider.js'
@@ -60,16 +60,35 @@ export const tronAdapter: ChainAdapter = {
 
     getTransaction,
 
+    /**
+     * 逐个探，不走缓存的首选客户端 —— 只探第一个的话，
+     * 其余候选是死是活运维根本看不见，降级到它们时才发现。
+     */
     async checkHealth(chain: Chain, timeoutMs = 4_000): Promise<readonly HealthResult[]> {
-      const startedAt = Date.now()
       // 没有可用 RPC 时 urlsFor 会抛，交给调用方处理
-      const url = redactRpcUrl(rpcProvider.urlsFor(chain)[0] ?? '')
-      try {
-        const blockNumber = await withTimeout(getBlockNumber(chain), timeoutMs)
-        return [{ url, ok: true, latencyMs: Date.now() - startedAt, blockNumber }]
-      } catch {
-        return [{ url, ok: false, latencyMs: Date.now() - startedAt, blockNumber: null }]
-      }
+      const urls = rpcProvider.urlsFor(chain)
+
+      return mapWithConcurrency(urls, READ_CONCURRENCY, async (url): Promise<HealthResult> => {
+        const startedAt = Date.now()
+        try {
+          const blockNumber = await withTimeout(getBlockNumberAt(url), timeoutMs)
+          return {
+            url: redactRpcUrl(url),
+            rawUrl: url,
+            ok: true,
+            latencyMs: Date.now() - startedAt,
+            blockNumber,
+          }
+        } catch {
+          return {
+            url: redactRpcUrl(url),
+            rawUrl: url,
+            ok: false,
+            latencyMs: Date.now() - startedAt,
+            blockNumber: null,
+          }
+        }
+      })
     },
 
     reset: resetClients,
