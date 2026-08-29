@@ -1,4 +1,4 @@
-import { formatUnits } from 'ethers'
+import { formatUnits, type FeeData } from 'ethers'
 import type { Chain } from '../../../models/chain.model.js'
 import {
   TxStatus,
@@ -68,6 +68,29 @@ export const multiplierAt = (policy: GasPolicy, attempt: number): number =>
 /** 按倍数放大 fee，整数运算避免浮点误差 */
 export const scaleFee = (value: bigint, multiplier: number): bigint =>
   (value * BigInt(Math.round(multiplier * 100))) / 100n
+
+/**
+ * 定价字段：优先 EIP-1559（type 2），节点不支持时退回 legacy gasPrice（type 0）。
+ *
+ * 合约调用和让 nonce 的自转账原先各写了一遍，但这两者**必须**用同一套规则：
+ * 一旦分叉出「原交易 type 2、替换交易 type 0」这种组合，节点按不同费率规则比较涨幅，
+ * 替换会被直接拒掉，卡住的 nonce 就再也让不出来了（见 releaseNonce 的说明）。
+ * 以后要支持 blob gas 之类也只改这一处。
+ */
+function feeFields(feeData: FeeData, multiplier: number, chainKey: string): Record<string, unknown> {
+  if (feeData.maxFeePerGas !== null && feeData.maxPriorityFeePerGas !== null) {
+    return {
+      type: 2,
+      maxFeePerGas: scaleFee(feeData.maxFeePerGas, multiplier).toString(),
+      maxPriorityFeePerGas: scaleFee(feeData.maxPriorityFeePerGas, multiplier).toString(),
+    }
+  }
+  if (feeData.gasPrice !== null) {
+    return { type: 0, gasPrice: scaleFee(feeData.gasPrice, multiplier).toString() }
+  }
+  // 两种价格都拿不到说明节点有问题，宁可不发也不能瞎猜一个 gas 价格
+  throw new AppError(ErrorCode.BROADCAST_FAILED, `无法从 ${chainKey} 获取 gas 价格`)
+}
 
 /* ─────────── 预演 ─────────── */
 
@@ -169,22 +192,7 @@ export async function buildUnsigned(
     gasLimit: ((gasEstimate * GAS_BUFFER) / 100n).toString(),
   }
 
-  // 优先 EIP-1559；节点不支持时退回 legacy gasPrice
-  const payload =
-    feeData.maxFeePerGas !== null && feeData.maxPriorityFeePerGas !== null
-      ? {
-          ...base,
-          type: 2,
-          maxFeePerGas: scaleFee(feeData.maxFeePerGas, multiplier).toString(),
-          maxPriorityFeePerGas: scaleFee(feeData.maxPriorityFeePerGas, multiplier).toString(),
-        }
-      : feeData.gasPrice !== null
-        ? { ...base, type: 0, gasPrice: scaleFee(feeData.gasPrice, multiplier).toString() }
-        : null
-
-  if (!payload) throw new AppError(ErrorCode.BROADCAST_FAILED, `无法从 ${chain.key} 获取 gas 价格`)
-
-  return { family: chain.type, payload }
+  return { family: chain.type, payload: { ...base, ...feeFields(feeData, multiplier, chain.key) } }
 }
 
 /* ─────────── 广播与确认 ─────────── */
@@ -373,27 +381,10 @@ async function buildSelfTransfer(
     gasLimit: '21000',
   }
 
-  const payload =
-    feeData.maxFeePerGas !== null && feeData.maxPriorityFeePerGas !== null
-      ? {
-          ...base,
-          type: 2,
-          maxFeePerGas: scaleFee(feeData.maxFeePerGas, NONCE_RELEASE_MULTIPLIER).toString(),
-          maxPriorityFeePerGas: scaleFee(
-            feeData.maxPriorityFeePerGas,
-            NONCE_RELEASE_MULTIPLIER,
-          ).toString(),
-        }
-      : feeData.gasPrice !== null
-        ? {
-            ...base,
-            type: 0,
-            gasPrice: scaleFee(feeData.gasPrice, NONCE_RELEASE_MULTIPLIER).toString(),
-          }
-        : null
-
-  if (!payload) throw new AppError(ErrorCode.BROADCAST_FAILED, `无法从 ${chain.key} 获取 gas 价格`)
-  return { family: chain.type, payload }
+  return {
+    family: chain.type,
+    payload: { ...base, ...feeFields(feeData, NONCE_RELEASE_MULTIPLIER, chain.key) },
+  }
 }
 
 /** 用 multicall 读一次目标状态，判断是否已经达成 */

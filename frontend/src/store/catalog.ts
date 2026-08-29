@@ -7,11 +7,26 @@ import type {
   Chain,
   Contract,
   ContractState,
+  Operation,
   OperationLog,
   Registry,
   SyncEvent,
   SyncResult,
 } from '../types'
+
+/**
+ * 后端没下发操作清单时用的兜底。
+ *
+ * 老版本后端的 /registry 里没有 operations 字段，配置还在加载时它也是空的 ——
+ * 这两种情况下不能让按钮消失：一个没有暂停按钮的紧急暂停界面等于没有界面。
+ */
+/** 风险等级，决定按钮从左到右的顺序 */
+const RISK: Readonly<Record<string, number>> = { unpause: 0, pause: 2 }
+
+const FALLBACK_OPERATIONS: readonly Operation[] = [
+  { kind: 'pause', label: '暂停' },
+  { kind: 'unpause', label: '恢复' },
+]
 
 /**
  * 配置目录与链上状态：看得见什么、选中了什么、现在是什么状态。
@@ -46,6 +61,33 @@ export function useCatalog(session: Session) {
 
   const chainOf = (key: string): Chain | undefined => chains.value.find((c) => c.key === key)
 
+  /**
+   * 能做哪些操作，由后端说了算 —— 界面上的按钮、确认框文案、日志里的中文名
+   * 全从这份清单来，后端加一种操作前端零改动。
+   */
+  /**
+   * 可执行的操作，**按风险从低到高排**。
+   *
+   * 位置本身是防误触的一环 —— 运维形成的肌肉记忆是"最右边那个是暂停"。
+   * 让后端数组顺序决定它，等于某天后端加个操作就把暂停挪了位，
+   * 那是紧急时最不该发生的事。风险等级和配色一样属于前端知识。
+   * 认不出的新操作排在中间：不确定的东西不该占据最危险的那个位置。
+   */
+  const operations = computed<readonly Operation[]>(() => {
+    const listed = registry.value?.operations
+    const source = listed && listed.length > 0 ? listed : FALLBACK_OPERATIONS
+    return [...source].sort((a, b) => (RISK[a.kind] ?? 1) - (RISK[b.kind] ?? 1))
+  })
+
+  const operationLabels = computed(() => new Map(operations.value.map((op) => [op.kind, op.label])))
+
+  /**
+   * kind → 中文名。
+   * 查不到就显示原始 kind：历史日志里可能有已经下线的操作，
+   * 按二选一的老写法会把它们统统显示成"恢复"，等于篡改记录。
+   */
+  const operationLabel = (kind: string): string => operationLabels.value.get(kind) ?? kind
+
   /** 勾选的业务线下的全部合约 */
   const visibleContracts = computed<Contract[]>(() =>
     selectedLines.value.size === 0
@@ -63,11 +105,20 @@ export function useCatalog(session: Session) {
    * 分母只算 canOperate 的 —— 钱包模式下另一链族的合约根本勾不动，
    * 把它们算进去会让全选框永远到不了全选态。
    */
-  const groups = computed(() =>
-    businessLines.value
+  const groups = computed(() => {
+    // 从 visibleContracts 分桶，不再自己过滤一遍 allContracts ——
+    // 「哪些合约算可见」只能有一处定义，两份迟早会分叉
+    const byLine = new Map<string, Contract[]>()
+    for (const contract of visibleContracts.value) {
+      const bucket = byLine.get(contract.businessLine)
+      if (bucket) bucket.push(contract)
+      else byLine.set(contract.businessLine, [contract])
+    }
+
+    return businessLines.value
       .filter((line) => selectedLines.value.has(line.id))
       .map((line) => {
-        const contracts = allContracts.value.filter((c) => c.businessLine === line.id)
+        const contracts = byLine.get(line.id) ?? []
         const operable = contracts.filter(canOperate)
         const picked = operable.filter((c) => selected.value.has(c.id)).length
         return {
@@ -83,8 +134,8 @@ export function useCatalog(session: Session) {
           needPause: countIn(operable, false),
           needResume: countIn(operable, true),
         }
-      }),
-  )
+      })
+  })
 
   /**
    * 顶部全选框的状态。
@@ -164,7 +215,9 @@ export function useCatalog(session: Session) {
             })
             return api.getRegistry()
           }),
-        api.getLogs(dayRange(logDay.value)),
+        // 历史日志是次要数据，它挂了不能连合约列表都出不来 ——
+        // 这是紧急暂停工具，能操作比能回顾重要
+        api.getLogs(dayRange(logDay.value)).catch(() => ({ items: [], total: 0 })),
       ])
       registry.value = reg
       logs.value = log.items
@@ -359,6 +412,7 @@ export function useCatalog(session: Session) {
   return {
     registry, selectedLines, collapsedLines, selected, states, logs, loading, syncEvents, syncResult,
     businessLines, chains, visibleContracts, selectedContracts, groups, allCollapsed, visibleSelection,
+    operations, operationLabel,
     chainOf, pausedCountOf, contractCountOf, canOperate,
     bootstrap, refreshStates, reloadLogs, logDay, setLogDay, jumpToToday,
     dailyCounts, loadDailyCounts,

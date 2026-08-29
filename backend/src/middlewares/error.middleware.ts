@@ -2,7 +2,7 @@ import type { NextFunction, Request, Response } from 'express'
 import type { Logger } from 'pino'
 import { ZodError } from 'zod'
 import { isProduction } from '../config/env.js'
-import { AppError, ErrorCode } from '../lib/utils/errors.js'
+import { AppError, ErrorCode, messageOf } from '../lib/utils/errors.js'
 import { fail } from '../lib/utils/response.js'
 import { logger } from '../lib/utils/logger.js'
 
@@ -58,6 +58,6 @@ export function errorHandler(
     res,
     500,
     ErrorCode.INTERNAL,
-    isProduction ? '服务器内部错误' : error instanceof Error ? error.message : String(error),
+    isProduction ? '服务器内部错误' : messageOf(error),
   )
 }

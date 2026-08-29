@@ -75,6 +75,14 @@ export async function constantCall(
       ? { ok: true, value: decodeConstant(result.constant_result ?? [], returns) }
       : { ok: false, reason: decodeError(result) }
   } catch (error) {
+    /**
+     * 刻意不用 messageOf。
+     *
+     * 两者对 Error 的处理是一样的（实测 tronweb 无论网络层还是 API 层
+     * 抛的都是 Error 子类），区别只在**兜底**：messageOf 用 String(error)，
+     * 而这个 reason 会原样显示给运维看 —— 万一拿到的是个普通对象，
+     * 屏幕上就是 [object Object]，不如退回一句人能读懂的话。
+     */
     return { ok: false, reason: error instanceof Error ? error.message : 'Tron 调用失败' }
   }
 }

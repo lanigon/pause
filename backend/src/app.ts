@@ -9,14 +9,16 @@ import { errorHandler, notFound } from './middlewares/error.middleware.js'
 /**
  * Express 应用组装。中间件顺序即安全边界，不要随意调整：
  *
- *   访问日志 → helmet → cors → 限流 → body 解析 → 路由 → 404 → 错误处理
+ *   访问日志 → helmet → cors → body 解析 → 路由 → 404 → 错误处理
  *
  * 日志排在最前面：被 helmet / cors 挡掉的请求也要留痕。
  * 这是个能改合约状态的运维工具，"谁在什么时候敲了哪个接口"本身就是审计材料，
  * 排在后面就等于把被拒绝的请求从审计里抹掉了。
  *
- * 注意 passphrase 那条路由用 text/plain 的 raw body：
- * 它不能经过 JSON 解析，否则 passphrase 会变成 V8 字符串留在内存里。
+ * 没有限流：本地运维工具，暴露面只有一台机器上的一个前端，
+ * 真正的门在 requireAuth（钱包签名登录）和 requireWriteRole 上。
+ * 全部请求体走 express.json —— 前端不传任何密钥材料，
+ * passphrase 由后端本机的 gpg-agent / pinentry 问，从不经过 HTTP。
  */
 export function createApp(): Express {
   const app = express()

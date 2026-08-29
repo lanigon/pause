@@ -33,7 +33,12 @@ export interface Signer {
   allowedBusinessLines: string[]
 }
 
-export type OperationKind = 'pause' | 'unpause'
+/**
+ * 操作名由后端 /registry 下发（services/operations.ts 里的那个闭集），前端不再自备清单 ——
+ * 写死成两个字面量的话，后端每加一种操作，前端都得跟着改一次才用得上。
+ * 保留 pause / unpause 只为编辑器提示，写法与上面的 ChainFamily 一致。
+ */
+export type OperationKind = 'pause' | 'unpause' | string
 
 export interface Operation {
   kind: OperationKind

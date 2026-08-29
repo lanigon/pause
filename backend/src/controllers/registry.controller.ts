@@ -4,17 +4,20 @@ import { dto, getRegistry as getRegistrySnapshot, loadRegistry } from '../servic
 import { activeCount } from '../services/batch.service.js'
 import * as logRepo from '../repositories/log.repository.js'
 import { tx } from '../lib/web3/index.js'
-import { readBusinessLineStates, readStates } from '../services/execution.service.js'
+import { readBusinessLineStates, readStates } from '../services/contractState.service.js'
 import { currentOperator } from '../middlewares/auth.middleware.js'
 import { ok } from '../lib/utils/response.js'
 import { openSse } from '../lib/utils/sse.js'
 import { syncFromLark, type SyncEvent } from '../services/sync.service.js'
 import { validated } from '../middlewares/validate.middleware.js'
-import { AppError, ErrorCode } from '../lib/utils/errors.js'
+import { AppError, ErrorCode, messageOf } from '../lib/utils/errors.js'
 
 /**
  * 前端渲染的唯一数据源：一个接口拿全 链+RPC+合约+业务线。
- * 只返回当前操作员有权限的业务线与合约。
+ *
+ * **不按人裁剪** —— 只有一份预计算好的 dto，所有能登录的人看到的内容都一样。
+ * 角色的区别只在能不能动（viewer 只读，由 requireWriteRole 在写接口上拦），
+ * 别把这里当成权限边界。
  */
 export function getRegistry(req: Request, res: Response): void {
   // 内存里预计算好的，直接给
@@ -55,7 +58,7 @@ export async function getRegistryStream(req: Request, res: Response): Promise<vo
     stream.emit('registry', { ...dto(), synced: result })
   } catch (error) {
     // 同步服务自己已经吞掉了所有可预期的失败，走到这儿说明是意料外的
-    const message = error instanceof Error ? error.message : String(error)
+    const message = messageOf(error)
     stream.emit('apply', { phase: 'apply', at: Date.now(), ok: false, message, code: 'SYNC_CRASHED' })
     stream.emit('registry', { ...dto(), synced: { changed: false, fromLark: false } })
   } finally {

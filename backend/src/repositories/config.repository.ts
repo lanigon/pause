@@ -9,7 +9,7 @@ import {
 import type { BusinessLine, ContractDef } from '../models/contract.model.js'
 import type { Chain } from '../models/chain.model.js'
 import type { Operator } from '../models/operator.model.js'
-import { readText, readJson, fileExists } from '../lib/utils/jsonFile.js'
+import { readText, readJson, writeJsonAtomic, fileExists } from '../lib/utils/jsonFile.js'
 import { EMPTY_RPC_FILE, type RpcFile } from '../lib/rpc/endpoint.js'
 import { AppError, ErrorCode } from '../lib/utils/errors.js'
 
@@ -123,3 +123,38 @@ export async function loadRawConfig(configDir: string = env.DATA_DIR): Promise<R
  */
 export const readRpcFile = (dataDir: string = env.DATA_DIR): Promise<RpcFile> =>
   readJson<RpcFile>(join(resolve(dataDir), 'rpc.json'), EMPTY_RPC_FILE)
+
+
+/**
+ * contracts.json 的内容形状。业务线与合约同在一个文件里，读写必须成对 ——
+ * 合约引用业务线 id，分开写会留下引用不到业务线的中间态。
+ */
+export interface ContractsFile {
+  readonly businessLines: readonly BusinessLine[]
+  readonly contracts: readonly ContractDef[]
+}
+
+const EMPTY_CONTRACTS: ContractsFile = { businessLines: [], contracts: [] }
+
+const contractsPath = (dataDir: string): string => join(resolve(dataDir), 'contracts.json')
+
+/**
+ * 读 data/contracts.json 的原始内容（不解析 ${ENV}、不校验 schema）。
+ *
+ * 给 Lark 同步比对用：它要的是"磁盘上现在是什么"，校验过的那份在
+ * loadRawConfig 那条路上。文件不存在返回空清单 —— 还没同步过而已，不是错。
+ */
+export const readContracts = (dataDir: string = env.DATA_DIR): Promise<ContractsFile> =>
+  readJson<ContractsFile>(contractsPath(dataDir), EMPTY_CONTRACTS)
+
+/**
+ * 覆盖写 data/contracts.json。
+ *
+ * 只取这两个字段：调用方传进来的往往还带着解析过程的信息（跳过了哪些行），
+ * 那些是事件里的内容，混进磁盘就会被下次 schema 校验拒掉。
+ */
+export const saveContracts = (payload: ContractsFile, dataDir: string = env.DATA_DIR): Promise<void> =>
+  writeJsonAtomic(contractsPath(dataDir), {
+    businessLines: payload.businessLines,
+    contracts: payload.contracts,
+  })

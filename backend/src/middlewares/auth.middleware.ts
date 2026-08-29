@@ -4,7 +4,7 @@ import { toAuthContext, verifyToken, type AuthContext } from '../services/auth.s
 import { AppError, ErrorCode } from '../lib/utils/errors.js'
 
 /** 能执行写操作的角色。viewer 只能看 */
-export const canWrite = (role: OperatorRole): boolean => role === 'admin' || role === 'operator'
+const canWrite = (role: OperatorRole): boolean => role === 'admin' || role === 'operator'
 
 declare module 'express-serve-static-core' {
   interface Request {

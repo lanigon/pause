@@ -3,8 +3,6 @@ import type {
   BatchItem,
   BatchItemResult,
   ChainFamily,
-  ReadCall,
-  ReadResult,
   SignPayloadFn,
 } from '../lib/web3/types.js'
 import { meta, tx } from '../lib/web3/chains.js'
@@ -12,15 +10,15 @@ import { SigningAbortedError } from '../lib/web3/runner.js'
 import type { ContractDef } from '../models/contract.model.js'
 import type { OperationKind } from './operations.js'
 import {
-  CONTRACT_READS,
   PAUSED_READ,
   expectedPausedState,
   labelOf,
   requiredPausedState,
 } from './operations.js'
 import type { AuthContext } from '../services/auth.service.js'
-import { contractsOf, getChain, getContract } from '../services/registry.service.js'
-import { AppError, ErrorCode } from '../lib/utils/errors.js'
+import { getChain, groupBy } from '../services/registry.service.js'
+import { readStates } from './contractState.service.js'
+import { AppError, ErrorCode, messageOf } from '../lib/utils/errors.js'
 import { logger } from '../lib/utils/logger.js'
 
 /**
@@ -28,8 +26,11 @@ import { logger } from '../lib/utils/logger.js'
  *  交易执行器 —— 批量操作的编排中枢
  * ═══════════════════════════════════════════════════════════════════════════
  *
- * 流程：授权校验 → 读当前状态做前置检查 → 按链分组**并行** → 各链 adapter.executeBatch
- *      → 每一步 emit 事件（SSE 推前端 + 写操作日志）→ 汇总
+ * 流程：前置检查（读当前状态，见 contractState.service）→ 按链分组**并行**
+ *      → 各链 adapter.executeBatch → 每一步 emit 事件（SSE 推前端 + 写操作日志）→ 汇总
+ *
+ * 这里只有会改链上状态的那一半。纯只读的状态查询在 contractState.service，
+ * 它的调用方（controller）不该为了读一个 paused 就把整条写路径拖进来。
  *
  * 它不知道私钥从哪来（sign 是注入的回调），也不知道事件推到哪去（emit 是注入的），
  * 所以可以脱离 HTTP 与 GPG 单独测试。
@@ -89,15 +90,6 @@ export interface ExecutionEvent {
 
 export type EmitFn = (event: Omit<ExecutionEvent, 'at'>) => void
 
-/** 单个合约的链上状态快照 */
-export interface ContractState {
-  readonly contractId: string
-  readonly chainKey: string
-  /** 主状态：列表里的 Active / Paused 标签看它。读不到为 undefined */
-  readonly paused?: boolean
-  readonly fetchedAt: number
-}
-
 export interface ExecutionItem {
   readonly contractId: string
   readonly contractName: string
@@ -146,80 +138,17 @@ export function assertAuthorized(params: {
   }
 }
 
-/* ════════════════════ 读状态 ════════════════════ */
-
-/**
- * 批量读合约链上状态。按链分组交给各自 adapter —— EVM 走 Multicall3 一次 RPC 读完，
- * Tron 走受限并发。读什么是固定的（只有 paused），配置里不用声明。
- */
-export async function readStates(
-  contractIds: readonly string[],
-): Promise<ReadonlyMap<string, ContractState>> {
-  const groups = groupBy(contractIds.map(getContract), (c) => c.chain)
-
-  const perChain = await Promise.all(
-    [...groups.entries()].map(([chainKey, contracts]) => readChainGroup(chainKey, contracts)),
-  )
-
-  const merged = new Map<string, ContractState>()
-  for (const states of perChain) for (const state of states) merged.set(state.contractId, state)
-  return merged
-}
-
-/** 读一整条业务线（前端切业务线时用） */
-export const readBusinessLineStates = (businessLine: string): Promise<ReadonlyMap<string, ContractState>> =>
-  readStates(contractsOf(businessLine).map((c) => c.id))
-
-async function readChainGroup(
-  chainKey: string,
-  contracts: readonly ContractDef[],
-): Promise<readonly ContractState[]> {
-  const chain = getChain(chainKey)
-  const fetchedAt = Date.now()
-
-  // N 个合约 × 固定几个只读字段摊平成一批，callId 编码成 "contractId::key"
-  const calls: ReadCall[] = contracts.flatMap((contract) =>
-    CONTRACT_READS.map((read) => ({
-      id: `${contract.id}::${read.key}`,
-      target: contract.address,
-      method: read.method,
-      args: read.args,
-      returns: read.returns,
-    })),
-  )
-
-  let results: readonly ReadResult[]
-  try {
-    results = await tx(chain.type).readBatch(chain, calls)
-  } catch (error) {
-    logger.warn(
-      { chain: chainKey, error: error instanceof Error ? error.message : error },
-      '批量读链上状态失败，该链所有合约状态置为 unknown',
-    )
-    return contracts.map((c) => ({ contractId: c.id, chainKey, fetchedAt }))
-  }
-
-  const byId = new Map(results.map((r) => [r.id, r]))
-
-  return contracts.map((contract): ContractState => {
-    const paused = byId.get(`${contract.id}::paused`)
-    return {
-      contractId: contract.id,
-      chainKey,
-      paused: paused?.success && typeof paused.value === 'boolean' ? paused.value : undefined,
-      fetchedAt,
-    }
-  })
-}
-
 /* ════════════════════ 执行 ════════════════════ */
 
 
+/**
+ * 授权**不在这里查**：batch.service.plan() 已经查过，而且必须由它查 ——
+ * 那是读 passphrase 之前的最后一道关。从 plan() 到这里没有任何一步能改动
+ * contracts / signers，再查一遍只会让人以为两处各管一半，将来删错那一处。
+ */
 export async function execute(params: ExecuteParams): Promise<ExecutionSummary> {
   const { operation, contracts, emit } = params
   const label = labelOf(operation)
-
-  assertAuthorized(params)
 
   emit({ phase: Phase.START, message: `开始批量${label}，共 ${contracts.length} 个合约` })
 
@@ -397,7 +326,7 @@ async function runChain(
       emit({ phase: Phase.ERROR, chainKey, message: `签名失败，${chain.key} 剩余操作已中止` })
       results = error.completed
     } else {
-      const reason = error instanceof Error ? error.message : String(error)
+      const reason = messageOf(error)
       logger.error({ chainKey, reason }, '链上批量执行异常')
       emit({ phase: Phase.ERROR, chainKey, message: `${chain.key} 执行异常：${reason}` })
       return group.map((contract) => ({
@@ -423,16 +352,6 @@ async function runChain(
 }
 
 /* ════════════════════ 工具 ════════════════════ */
-
-function groupBy<T>(items: readonly T[], keyOf: (item: T) => string): ReadonlyMap<string, T[]> {
-  const map = new Map<string, T[]>()
-  for (const item of items) {
-    const bucket = map.get(keyOf(item))
-    if (bucket) bucket.push(item)
-    else map.set(keyOf(item), [item])
-  }
-  return map
-}
 
 function summarize(items: readonly ExecutionItem[]): ExecutionSummary {
   let succeeded = 0

@@ -5,11 +5,9 @@ import type { ChainAdapter } from '../ChainAdapter.js'
 import { runBatch, type BatchStrategy } from '../runner.js'
 import { constantCall, getBlockNumberAt, resetClients, toBase58, toHex41, READ_CONCURRENCY } from './client.js'
 import { broadcast, buildTransaction, getTransaction, waitForConfirmation } from './tx.js'
-import { redactRpcUrl, withTimeout } from '../../utils/net.js'
+import { redactRpcUrl, trimSlash, withTimeout } from '../../utils/net.js'
 import { rpcProvider } from '../../rpc/rpcProvider.js'
 import { requireSingleSigner, serializePerSigner } from '../runner.js'
-
-const trimSlash = (url: string): string => url.replace(/\/$/, '')
 
 async function mapWithConcurrency<T, R>(
   items: readonly T[],

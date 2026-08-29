@@ -14,8 +14,7 @@ import {
 } from './tx.js'
 import { requireSingleSigner, serializePerSigner } from '../runner.js'
 import { evmNonceManager } from './nonce.js'
-
-const trimSlash = (url: string): string => url.replace(/\/$/, '')
+import { trimSlash } from '../../utils/net.js'
 
 /**
  * EVM 链族适配器。

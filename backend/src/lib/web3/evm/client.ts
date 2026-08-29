@@ -5,6 +5,7 @@ import { PAUSABLE_ABI } from './abi.js'
 import { rpcProvider } from '../../rpc/rpcProvider.js'
 import { logger } from '../../utils/logger.js'
 import { redactRpcUrl, withTimeout } from '../../utils/net.js'
+import { messageOf } from '../../utils/errors.js'
 
 /**
  * EVM 节点访问：provider 池 + 批量只读 + 健康探测。
@@ -118,7 +119,7 @@ export async function readBatch(chain: Chain, calls: readonly ReadCall[]): Promi
     })
   } catch (error) {
     logger.warn(
-      { chain: chain.key, error: error instanceof Error ? error.message : error },
+      { chain: chain.key, error: messageOf(error) },
       'multicall 失败（这条链可能没部署 Multicall3），回退到并发单点调用',
     )
     return fallbackRead(provider, calls)

@@ -12,9 +12,13 @@ loadDotenv()
  * 除了两个**密钥**，其余全是代码里的常量 —— 这是个本地运行的运维工具，
  * 端口、超时、路径这些不需要按环境变化，做成配置项只会多一处出错的地方。
  *
- * 环境变量只有两个，都是"这台机器特有的位置/凭证"，做不成常量：
+ * 要配的环境变量只有两个，都是"这台机器特有的位置/凭证"，做不成常量：
  *   ALCHEMY_API_KEY  RPC 三级降级里的第二级，不填就降级到 Lark / ChainList
  *   LARK_URL         飞书表格链接（浏览器地址栏原样复制），不填就跳过同步、只用本地数据
+ *
+ * 另外读了两个但都有默认值、平时不用管：
+ *   NODE_ENV         运行时标准变量
+ *   GPG_BINARY       gpg 不在 PATH 里时的逃生口（默认就是 'gpg'）
  *
  * 密钥口令不在这里：后端是本地运行的，解密交给本机的 gpg-agent / pinentry ——
  * YubiKey 场景本来就是这样（输 PIN + 触摸设备），对称加密的口令也一样由 pinentry 问。
@@ -27,42 +31,42 @@ loadDotenv()
 /* ── 环境变量 ────────────────────────────────────────────────────────── */
 
 /** RPC 三级降级的第二级。缺失时自动降级到 Lark / ChainList */
-export const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY?.trim() || undefined
+const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY?.trim() || undefined
 
 /**
  * 飞书表格链接（一张表四列：业务线/链/RPC/合约）。
  * 直接贴浏览器地址栏里的完整 URL，app token 与 table id 由代码从里面解。
  * 缺失时跳过同步，只用本地数据。
  */
-export const LARK_URL = process.env.LARK_URL?.trim() ?? ''
+const LARK_URL = process.env.LARK_URL?.trim() ?? ''
 
 /* ── 其余全是常量 ────────────────────────────────────────────────────── */
 
-export const NODE_ENV = process.env.NODE_ENV ?? 'development'
+const NODE_ENV = process.env.NODE_ENV ?? 'development'
 export const isProduction = NODE_ENV === 'production'
 export const isTest = NODE_ENV === 'test'
 
-export const PORT = 8787
-export const LOG_LEVEL = isProduction ? 'info' : 'debug'
+const PORT = 8787
+const LOG_LEVEL = isProduction ? 'info' : 'debug'
 
 /** 前端来源。本地工具，前端就跑在这台机器上 */
-export const CORS_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173']
+const CORS_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173']
 
 /** 全部 JSON 数据：chains / contracts / operators / signers / rpc / operations */
-export const DATA_DIR = './data'
+const DATA_DIR = './data'
 /** GPG 加密的运维私钥，已 gitignore */
-export const SECRETS_DIR = './secrets'
+const SECRETS_DIR = './secrets'
 
-export const GPG_BINARY = process.env.GPG_BINARY ?? 'gpg'
+const GPG_BINARY = process.env.GPG_BINARY ?? 'gpg'
 
 /** JWT 有效期。过期就重新用钱包签一次名，没有 refresh 流程 */
-export const JWT_TTL_SECONDS = 8 * 3600
+const JWT_TTL_SECONDS = 8 * 3600
 
 /** 整个批量任务的超时上限（含解密 + 全部签名 + 等待上链） */
-export const GPG_JOB_TIMEOUT_MS = 180_000
+const GPG_JOB_TIMEOUT_MS = 180_000
 
 /** SSE 心跳间隔，防中间代理因空闲断连 */
-export const SSE_HEARTBEAT_MS = 15_000
+const SSE_HEARTBEAT_MS = 15_000
 
 /**
  * JWT 签名密钥。
@@ -71,7 +75,7 @@ export const SSE_HEARTBEAT_MS = 15_000
  * 开发：缓存到 secrets/.jwt-dev（0600，已 gitignore）—— tsx watch 改一行代码就重启，
  *      每次都把人踢下线没法测。这个文件只在非生产环境读写。
  */
-export const JWT_SECRET = NODE_ENV === 'production' ? randomBytes(32).toString('hex') : devSecret()
+const JWT_SECRET = NODE_ENV === 'production' ? randomBytes(32).toString('hex') : devSecret()
 
 function devSecret(): string {
   const file = `${SECRETS_DIR}/.jwt-dev`
@@ -91,7 +95,14 @@ function devSecret(): string {
   return fresh
 }
 
-/** 汇总成一个对象，上层统一从这里取 */
+/**
+ * 汇总成一个对象，上层统一从这里取。
+ *
+ * 上面那些常量**故意不单独导出** —— 全导一遍的话就有两条取值路径，
+ * 有人写 `import { DATA_DIR }`、有人写 `env.DATA_DIR`，
+ * 将来想在这里加一层（比如按环境覆盖、或做一次校验）会漏掉一半调用点。
+ * 对外只有三个出口：env、isProduction、isTest。
+ */
 export const env = {
   NODE_ENV,
   PORT,

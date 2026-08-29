@@ -19,3 +19,9 @@ export function redactRpcUrl(url: string): string {
     return '[invalid-url]'
   }
 }
+
+/**
+ * 去掉末尾斜杠。explorer 配成 "https://scan.io/" 时拼出来是双斜杠，部分浏览器直接 404。
+ * EVM 拼 /tx/、Tron 拼 /transaction/，路径不同但这条规则是同一条，各写一份迟早分叉。
+ */
+export const trimSlash = (url: string): string => url.replace(/\/$/, '')

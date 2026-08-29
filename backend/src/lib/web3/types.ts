@@ -27,9 +27,13 @@ export enum TxStatus {
   UNKNOWN = 'unknown',
 }
 
-/** 批量执行中单笔的状态 */
+/**
+ * 批量执行中单笔的状态。
+ *
+ * 没有 PENDING：结果只在 runBatch 整批跑完后一次性产出，那时每一笔都已是终态。
+ * 执行途中的中间态（已签名/已广播）走 BatchHooks 推 SSE，从不经过这个枚举。
+ */
 export enum BatchItemStatus {
-  PENDING = 'pending',
   /** 预演未通过，跳过 */
   SKIPPED = 'skipped',
   CONFIRMED = 'confirmed',

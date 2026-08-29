@@ -155,7 +155,8 @@ const explorerUrl = (chain: string, hash: string): string => {
         <el-tag size="small" :type="STATUS[entry.status].type" effect="plain">
           {{ STATUS[entry.status].label }}
         </el-tag>
-        <span class="log__op">{{ entry.operation === 'pause' ? '暂停' : '恢复' }}</span>
+        <!-- 中文名从后端下发的操作清单取；二选一的老写法会把别的操作也显示成"恢复" -->
+        <span class="log__op">{{ store.operationLabel(entry.operation) }}</span>
         <span class="log__contract">{{ entry.contract }}</span>
         <span class="log__chain">@{{ entry.chain }}</span>
         <a

@@ -25,6 +25,16 @@ export function useSession() {
  */
 const mode = ref<SignMode>('wallet')
 
+  /**
+   * 每个链族当前那个账户变更监听的解绑函数。
+   *
+   * 不解绑的后果：退出登录后监听器还活着，用户在钱包里换个账号，回调照样把
+   * connected 写成新地址 —— 顶栏绿着显示「已连接」，却没有 operator；
+   * 同一个链族反复连还会一层层叠加，一次换账号触发好几遍。
+   * 不是响应式数据，界面不看它，所以用普通 Map。
+   */
+  const accountWatchers = new Map<ChainFamily, () => void>()
+
   /** 返回 true 表示这次连接完成了登录，调用方该去加载数据了 */
   async function connect(wallet: WalletAdapter, onDisconnect: () => void): Promise<boolean> {
     const family = wallet.family
@@ -32,10 +42,15 @@ const mode = ref<SignMode>('wallet')
     connected.value = { ...connected.value, [family]: address }
     wallets.value = { ...wallets.value, [family]: wallet }
 
-    wallet.onAccountChange((next) => {
-      connected.value = { ...connected.value, [family]: next }
-      if (next === null && signsIn(family)) onDisconnect()
-    })
+    // 换钱包 / 重连同一个链族时，先摘掉上一次的监听再装新的
+    accountWatchers.get(family)?.()
+    accountWatchers.set(
+      family,
+      wallet.onAccountChange((next) => {
+        connected.value = { ...connected.value, [family]: next }
+        if (next === null && signsIn(family)) onDisconnect()
+      }),
+    )
 
     // 不参与登录的链族（Tron）只是连上；已登录的也不用再签一次
     if (!signsIn(family) || operator.value) return false
@@ -51,6 +66,10 @@ const mode = ref<SignMode>('wallet')
   }
 
   function resetSession(): void {
+    // 先断开监听再清状态：留着的话，钱包里一换账号又会把 connected 填回去
+    for (const unsubscribe of accountWatchers.values()) unsubscribe()
+    accountWatchers.clear()
+
     api.setToken(null)
     operator.value = null
     connected.value = byFamily<string | null>(() => null)

@@ -11,7 +11,7 @@ import type {
 } from './types.js'
 import { logger } from '../utils/logger.js'
 import { KeyedMutex } from '../utils/mutex.js'
-import { AppError, ErrorCode } from '../utils/errors.js'
+import { AppError, ErrorCode, messageOf } from '../utils/errors.js'
 
 /**
  * 批量执行的公共循环。
@@ -178,5 +178,3 @@ async function settleAll(
     }),
   )
 }
-
-const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error))

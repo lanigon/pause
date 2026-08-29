@@ -1,4 +1,9 @@
-/** 对外错误码：前端按 code 分支处理，message 只用于展示 */
+/**
+ * 对外错误码：前端按 code 分支处理，message 只用于展示。
+ *
+ * 只列**真的会被 throw 出来的**码。后端从不产出的码留在这里，
+ * 前端就会照着写一条永远走不到的分支，而且从代码上看不出它是死的。
+ */
 export const ErrorCode = {
   BAD_REQUEST: 'BAD_REQUEST',
   UNAUTHORIZED: 'UNAUTHORIZED',
@@ -28,8 +33,6 @@ export const ErrorCode = {
   SIMULATE_FAILED: 'SIMULATE_FAILED',
   BROADCAST_FAILED: 'BROADCAST_FAILED',
   RPC_UNAVAILABLE: 'RPC_UNAVAILABLE',
-  JOB_CONFLICT: 'JOB_CONFLICT',
-  RATE_LIMITED: 'RATE_LIMITED',
   INTERNAL: 'INTERNAL',
 } as const
 
@@ -56,8 +59,6 @@ const DEFAULT_STATUS: Record<ErrorCodeValue, number> = {
   SIMULATE_FAILED: 422,
   BROADCAST_FAILED: 502,
   RPC_UNAVAILABLE: 503,
-  JOB_CONFLICT: 409,
-  RATE_LIMITED: 429,
   INTERNAL: 500,
 }
 
@@ -84,4 +85,12 @@ export const badRequest = (message: string, details?: Record<string, unknown>) =
   new AppError(ErrorCode.BAD_REQUEST, message, details ? { details } : undefined)
 
 export const notFound = (message: string) => new AppError(ErrorCode.NOT_FOUND, message)
+
+/**
+ * throw 出来的东西不一定是 Error —— ethers / tronweb / 子进程 IPC 都可能抛裸对象或字符串，
+ * 直接读 .message 会拿到 undefined，把"节点拒绝了这笔交易"变成一条空白理由。
+ * 全项目统一从这里收口，别再各处手写同一个三元表达式。
+ */
+export const messageOf = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error)
 

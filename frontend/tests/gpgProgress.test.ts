@@ -119,6 +119,19 @@ describe('交易结果折叠', () => {
     expect(rowsOf(wrapper)[0]?.message).toBe('合约已处于暂停状态')
   })
 
+  it('★ 关闭时清干净：失败横幅不能带到下一轮', () => {
+    const wrapper = mountWith([
+      { phase: 'failed', at: 1, contractId: 'a', message: '预演失败' },
+    ])
+    const store = useStore()
+    store.failure = { message: '没检测到 YubiKey', code: 'CARD_ABSENT' }
+
+    ;(wrapper.vm as unknown as { close: () => void }).close()
+
+    expect(store.events).toEqual([])
+    expect(store.failure).toBeNull()
+  })
+
   it('配置里找不到的合约用 id 兜底，不能显示成空白', () => {
     const wrapper = mountWith([
       { phase: 'failed', at: 1, contractId: 'ghost', chainKey: 'morph', message: '合约不存在' },

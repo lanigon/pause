@@ -155,6 +155,21 @@ describe('GPG 批量执行', () => {
   })
 })
 
+describe('清空本轮进度', () => {
+  it('★ 关掉弹窗要连失败原因一起清 —— 否则下次打开顶着上一轮的错误横幅', async () => {
+    runBatch.mockRejectedValue(new Error('炸了'))
+
+    const s = await ready()
+    await s.runGpgBatch('pause')
+    expect(s.failure).not.toBeNull()
+
+    s.clearEvents()
+
+    expect(s.events).toEqual([])
+    expect(s.failure).toBeNull()
+  })
+})
+
 describe('钱包模式逐笔签名', () => {
   it('★ 一个合约失败不能中断后面的 —— 紧急暂停要尽可能多暂停几个', async () => {
     sendTransaction.mockRejectedValueOnce(new Error('用户拒绝签名')).mockResolvedValueOnce('0xok')

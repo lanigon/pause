@@ -9,7 +9,7 @@ import { getChain, getContract, getRegistry } from './registry.service.js'
 import { openSessions } from '../lib/keys/signer.js'
 import { GpgKey } from '../lib/keys/gpg.js'
 import * as logRepo from '../repositories/log.repository.js'
-import { AppError, ErrorCode, badRequest } from '../lib/utils/errors.js'
+import { AppError, ErrorCode, badRequest, messageOf } from '../lib/utils/errors.js'
 import { logger } from '../lib/utils/logger.js'
 
 /**
@@ -81,7 +81,12 @@ export async function plan(params: {
   const contracts = params.contractIds.map(getContract)
   const signers = await signersFor(contracts)
 
-  // 四道授权关，任一不过整批拒绝
+  /**
+   * 挡在读口令**之前**：所选合约涉及的每个链族都得有密钥，缺一个就整批拒绝。
+   * 不做"部分放行" —— 半停半没停的中间态比全不执行更危险。
+   *
+   * 人的权限已经在 HTTP 层挡过了（能登录说明在白名单里，能走到这儿说明不是 viewer）。
+   */
   assertAuthorized({ contracts, signers })
 
   return { operation: params.operation, contracts, signers, actor: params.actor }
@@ -158,7 +163,7 @@ export async function run(
   } catch (error) {
     // 走到这里说明是全局性失败：密钥解不开、或整条链的 RPC 全挂了。
     // 单笔交易的失败不会到这，它们已经在 RPC 降级 + gas 翻倍重发里兜过一轮了。
-    const reason = error instanceof Error ? error.message : String(error)
+    const reason = messageOf(error)
     const code = error instanceof AppError ? error.code : ErrorCode.INTERNAL
     logger.error({ operation, code, reason }, '批量任务失败')
 

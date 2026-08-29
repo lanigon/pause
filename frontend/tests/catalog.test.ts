@@ -187,6 +187,72 @@ describe('勾选与派生', () => {
   })
 })
 
+describe('操作清单来自后端', () => {
+  it('后端下发什么就渲染什么 —— 加一种操作前端不用改', async () => {
+    syncRegistry.mockResolvedValue({
+      ...REGISTRY,
+      operations: [
+        { kind: 'pause', label: '暂停' },
+        { kind: 'unpause', label: '恢复' },
+        { kind: 'freeze', label: '冻结' },
+      ],
+      synced: { changed: false, fromLark: true },
+    })
+
+    const s = await store()
+    await s.bootstrap()
+
+    // 顺序由风险等级决定（另有测试），这里只关心后端下发的都在
+    expect([...s.operations.map((op) => op.kind)].sort()).toEqual(['freeze', 'pause', 'unpause'])
+    expect(s.operationLabel('freeze')).toBe('冻结')
+  })
+
+  it('★ 清单为空时退回内置的两个 —— 老后端不下发，界面不能连按钮都没有', async () => {
+    const s = await store()
+    await s.bootstrap() // REGISTRY.operations 是空的
+
+    expect([...s.operations.map((op) => op.kind)].sort()).toEqual(['pause', 'unpause'])
+    expect(s.operationLabel('pause')).toBe('暂停')
+  })
+
+  it('配置还没加载时也有按钮可点', async () => {
+    const s = await store()
+    expect(s.operations).toHaveLength(2)
+  })
+
+  it('★ 认不出的操作显示原始名，不能默认当成"恢复"', async () => {
+    // 历史日志里可能有已经下线的操作，二选一的老写法会把它们全篡改成"恢复"
+    const s = await store()
+    await s.bootstrap()
+
+    expect(s.operationLabel('freeze')).toBe('freeze')
+  })
+})
+
+describe('分组只看得见的合约', () => {
+  it('★ 分组内容 = visibleContracts，两处过滤不能各写一份', async () => {
+    const s = await store()
+    await s.bootstrap()
+    s.toggleLine('bridge')
+
+    const grouped = s.groups.flatMap((g) => g.contracts.map((c) => c.id))
+    expect(grouped.sort()).toEqual(s.visibleContracts.map((c) => c.id).sort())
+  })
+})
+
+describe('次要数据不拖垮启动', () => {
+  it('★ /logs 挂了照样要能看到合约列表 —— 这是紧急暂停工具', async () => {
+    getLogs.mockRejectedValueOnce(new Error('500'))
+
+    const s = await store()
+    await s.bootstrap()
+
+    expect(s.registry?.configVersion).toBe('v1')
+    expect(s.logs).toEqual([])
+    expect(s.loading).toBe(false)
+  })
+})
+
 describe('链上状态', () => {
   it('multicall 一个都没读到时退回后端代读', async () => {
     // 公开 RPC 常常不带 CORS 头，浏览器会直接拦掉
@@ -207,5 +273,42 @@ describe('链上状态', () => {
     await s.bootstrap()
 
     expect(getStates).not.toHaveBeenCalled()
+  })
+})
+
+describe('操作按钮的排序（位置即防误触）', () => {
+  it('★ 暂停永远在最右 —— 顺序不能被后端清单左右', async () => {
+    // 后端把 pause 排在前面（bootstrap 走的是 syncRegistry，不是 getRegistry）
+    syncRegistry.mockResolvedValue({
+      ...REGISTRY,
+      operations: [
+        { kind: 'pause', label: '暂停' },
+        { kind: 'unpause', label: '恢复' },
+      ],
+      synced: { changed: false, fromLark: true },
+    })
+
+    const s = await store()
+    await s.bootstrap()
+
+    // 运维的肌肉记忆是"最右边那个是暂停"，后端排在前面也得给它挪到最后
+    expect(s.operations.map((o) => o.kind)).toEqual(['unpause', 'pause'])
+  })
+
+  it('认不出的新操作排在中间，不占最危险那个位置', async () => {
+    syncRegistry.mockResolvedValue({
+      ...REGISTRY,
+      operations: [
+        { kind: 'pause', label: '暂停' },
+        { kind: 'freeze', label: '冻结' },
+        { kind: 'unpause', label: '恢复' },
+      ],
+      synced: { changed: false, fromLark: true },
+    })
+
+    const s = await store()
+    await s.bootstrap()
+
+    expect(s.operations.map((o) => o.kind)).toEqual(['unpause', 'freeze', 'pause'])
   })
 })

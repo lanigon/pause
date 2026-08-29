@@ -162,13 +162,29 @@ export function useExecution(catalog: Catalog, session: Session) {
     }
   }
 
+  /**
+   * 关掉进度弹窗 = 丢掉这一轮的进度。
+   *
+   * failure 必须跟着一起清 —— 只清 events 的话，下一轮执行前打开弹窗，
+   * 顶上还挂着上一轮的红色错误横幅，会被当成这次就失败了。
+   * 由 store 提供而不是让组件写 events：清哪些字段是这块自己的事，
+   * 组件漏掉一个就是这种脏状态。
+   */
+  function clearEvents(): void {
+    events.value = []
+    failure.value = null
+  }
+
+  /** 退出登录时的整体复位，比 clearEvents 多做一件事：把正在跑的请求也中止掉 */
   function resetExecution(): void {
     abortController?.abort()
     abortController = null
-    events.value = []
-    failure.value = null
+    clearEvents()
     running.value = false
   }
 
-  return { events, failure, running, runGpgBatch, runWalletBatch, cancelBatch, resetExecution }
+  return {
+    events, failure, running,
+    runGpgBatch, runWalletBatch, cancelBatch, clearEvents, resetExecution,
+  }
 }

@@ -32,7 +32,14 @@ export interface WalletAdapter {
   /** 当前所在链（EVM 为 chainId，Tron 返回 null 表示不适用） */
   currentChainId(): Promise<number | null>
   switchChain(chain: Chain): Promise<void>
-  onAccountChange(handler: (address: string | null) => void): void
+  /**
+   * 订阅账户变更，返回解绑函数。
+   *
+   * **必须能解绑**：断开登录后监听器还活着的话，用户在钱包里换个账号，
+   * 回调仍会把 connected 写成新地址 —— 顶栏显示绿色「已连接」，
+   * 实际上没有 operator，什么也做不了。重连时也会一层层叠加监听。
+   */
+  onAccountChange(handler: (address: string | null) => void): () => void
 }
 
 /** 和 multicall 共用同一份 ABI，免得两处各写一份、改一处漏一处 */
@@ -42,6 +49,8 @@ const encodeOperation = (operation: string): string => iface.encodeFunctionData(
 
 type InjectedProvider = Eip1193Provider & {
   on?: (event: string, handler: (...args: unknown[]) => void) => void
+  /** EIP-1193 要求提供，但老钱包不一定有 —— 没有就退化成解绑无效，不能直接崩 */
+  removeListener?: (event: string, handler: (...args: unknown[]) => void) => void
 }
 
 /** EIP-6963：钱包各自广播自己，不再抢 window.ethereum */
@@ -103,6 +112,7 @@ interface TronProvider {
   /** 授权前是 false */
   tronWeb?: TronWebApi | false
   on?: (event: string, handler: (...args: unknown[]) => void) => void
+  removeListener?: (event: string, handler: (...args: unknown[]) => void) => void
 }
 
 /** 老版 tron_requestAccounts 的返回：200 成功 / 4000 已在队列 / 4001 用户拒绝 */
@@ -193,10 +203,13 @@ function createEvmWallet(
     },
 
     onAccountChange(handler) {
-      provider.on?.('accountsChanged', (...args) => {
+      // 监听器提出来命名，解绑时要拿同一个引用才摘得掉
+      const listener = (...args: unknown[]): void => {
         const accounts = args[0] as string[] | undefined
         handler(accounts?.[0] ?? null)
-      })
+      }
+      provider.on?.('accountsChanged', listener)
+      return () => provider.removeListener?.('accountsChanged', listener)
     },
   }
   return wallet
@@ -416,13 +429,18 @@ function createTronWallet(
 
     onAccountChange(handler) {
       if (provider?.on) {
-        provider.on('accountsChanged', () =>
-          handler(tronWebOf(provider)?.defaultAddress?.base58 ?? null),
-        )
-        return
+        const listener = (): void =>
+          handler(tronWebOf(provider)?.defaultAddress?.base58 ?? null)
+        provider.on('accountsChanged', listener)
+        return () => provider.removeListener?.('accountsChanged', listener)
       }
       legacyAccountHandler = handler
       installLegacyAccountListener()
+      // 全局只有一个 message 监听器（见上），所以解绑就是摘掉回调；
+      // 比对一下是不是自己那个，免得把后来者装的回调也摘了
+      return () => {
+        if (legacyAccountHandler === handler) legacyAccountHandler = null
+      }
     },
   }
 

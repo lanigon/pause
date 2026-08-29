@@ -22,7 +22,9 @@ const states = new Map([
   ['unknown', { contractId: 'unknown', chainKey: 'morph', fetchedAt: 0 }], // 没有 paused 字段
 ])
 
-vi.mock('../src/services/registry.service.js', () => ({
+// 只替掉「配置从哪来」这三个查询，其余（如纯函数 groupBy）用真的
+vi.mock('../src/services/registry.service.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/services/registry.service.js')>()),
   getChain: (key: string) => ({ key, name: 'Morph', type: 'evm', chainId: 2818, explorer: 'https://e', confirmations: 1, symbol: 'E', decimals: 18, multicall3: null }),
   getContract: (id: string) => contracts.find((c) => c.id === id),
   contractsOf: () => contracts,
@@ -50,7 +52,9 @@ vi.mock('../src/lib/web3/chains.js', async () => {
   }
 })
 
-const { execute, assertAuthorized, readStates } = await import('../src/services/execution.service.js')
+const { execute, assertAuthorized } = await import('../src/services/execution.service.js')
+// 只读状态查询已拆到 contractState.service
+const { readStates } = await import('../src/services/contractState.service.js')
 
 const signer = { chainType: 'evm', address: '0xSIGNER', unlock: 'passphrase' } as never
 const actor = { address: '0xALICE', label: 'Alice', role: 'admin' } as never

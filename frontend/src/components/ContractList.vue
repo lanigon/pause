@@ -4,7 +4,8 @@ import { ElMessage, ElMessageBox, type CheckboxValueType } from 'element-plus'
 import { ArrowDown } from '@element-plus/icons-vue'
 import { useStore } from '../store'
 import { shorten } from '../chain/wallet'
-import type { Contract, OperationKind } from '../types'
+import { pendingLabel } from '../labels'
+import type { Contract, Operation } from '../types'
 
 /**
  * 合约区。
@@ -27,9 +28,6 @@ const statusOf = (contract: Contract) => {
   return { text: '未知', type: 'info' as const }
 }
 
-const pendingLabel = (phase: string): string =>
-  ({ simulate: '预演中', sign: '签名中', broadcast: '广播中', skip: '已跳过' })[phase] ?? '处理中'
-
 const explorerUrl = (contract: Contract): string => {
   const state = store.states.get(contract.id)
   if (state?.explorerUrl) return state.explorerUrl
@@ -51,11 +49,25 @@ const canWrite = computed(() => {
 /** 确认框里最多列几个合约，其余折成一句 —— 批量几十个时弹窗会撑出屏幕 */
 const CONFIRM_PREVIEW = 8
 
-async function run(operation: OperationKind) {
+/**
+ * 按钮配色。颜色是**风险提示**，后端下发不了，所以留在前端。
+ *
+ * 认不出的新操作按普通按钮渲染：宁可不显眼，也不能给一个不知道会做什么的操作
+ * 套上红色，那等于替它背书说"这是紧急暂停"。
+ */
+const BUTTON_TYPE: Readonly<Record<string, 'danger' | 'warning'>> = {
+  pause: 'danger',
+  unpause: 'warning',
+}
+const buttonTypeOf = (kind: string) => BUTTON_TYPE[kind] ?? 'primary'
+
+
+/** 操作与中文名都来自 store 的清单，这里不再认识具体是哪一种操作 */
+async function run(operation: Operation) {
   const targets = store.selectedContracts
   if (targets.length === 0) return ElMessage.warning('请先勾选合约')
 
-  const label = operation === 'pause' ? '暂停' : '恢复'
+  const label = operation.label
   try {
     const preview = targets
       .slice(0, CONFIRM_PREVIEW)
@@ -83,8 +95,8 @@ async function run(operation: OperationKind) {
   try {
     // GPG 模式不需要输任何密钥 —— 后端本地解密，需要时用户去按插在服务器上的 YubiKey
     const { ok, failed } = await (store.mode === 'wallet'
-      ? store.runWalletBatch(operation)
-      : store.runGpgBatch(operation))
+      ? store.runWalletBatch(operation.kind)
+      : store.runGpgBatch(operation.kind))
 
     /**
      * 按真实结果给提示。
@@ -133,16 +145,16 @@ async function run(operation: OperationKind) {
       </el-button>
 
       <el-button :loading="store.running" @click="store.refreshStates">刷新状态</el-button>
+      <!-- 操作按钮由后端下发的清单生成：后端加一种操作，这里自动多一个按钮 -->
       <el-button
-        type="warning"
+        v-for="operation in store.operations"
+        :key="operation.kind"
+        :type="buttonTypeOf(operation.kind)"
         :loading="store.running"
         :disabled="!canWrite"
-        @click="run('unpause')"
+        @click="run(operation)"
       >
-        批量恢复
-      </el-button>
-      <el-button type="danger" :loading="store.running" :disabled="!canWrite" @click="run('pause')">
-        批量暂停
+        批量{{ operation.label }}
       </el-button>
     </div>
 

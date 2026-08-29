@@ -1,5 +1,6 @@
+import { messageOf } from '../lib/utils/errors.js'
 import { createHash } from 'node:crypto'
-import { writeJsonAtomic, readJson } from '../lib/utils/jsonFile.js'
+import { readContracts, saveContracts, type ContractsFile } from '../repositories/config.repository.js'
 import { field, LarkError, readTable, type LarkRow } from '../lib/lark/client.js'
 import { KeyedMutex } from '../lib/utils/mutex.js'
 import { logger } from '../lib/utils/logger.js'
@@ -7,7 +8,7 @@ import { env } from '../config/env.js'
 import { contractsFileSchema } from '../config/config.schema.js'
 import { getRegistry, loadRegistry } from './registry.service.js'
 import type { Chain } from '../models/chain.model.js'
-import type { BusinessLine, ContractDef } from '../models/contract.model.js'
+import type { ContractDef } from '../models/contract.model.js'
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
@@ -24,10 +25,12 @@ import type { BusinessLine, ContractDef } from '../models/contract.model.js'
  *   ③ 不能每次刷页面都打 Lark —— TTL 缓存 + 互斥，并发请求共享同一次同步
  */
 
-export interface ContractsPayload {
-  readonly businessLines: readonly BusinessLine[]
-  readonly contracts: readonly ContractDef[]
-}
+/**
+ * 同步只管内容：解析、比对、决定写不写。
+ * contracts.json 在哪、怎么原子写、不存在时怎么办，全归 config.repository ——
+ * 换存储介质时这个文件一行都不用动。
+ */
+export type ContractsPayload = ContractsFile
 
 /** 解析结果 = 内容 + 被跳过的行（每条一句人话，说清是哪一行、为什么） */
 export interface ContractsResult extends ContractsPayload {
@@ -39,8 +42,6 @@ export interface ContractsResult extends ContractsPayload {
 const SYNC_TTL_MS = 60_000
 
 const LARK_TIMEOUT_MS = 15_000
-
-const CONTRACTS_FILE = `${env.DATA_DIR}/contracts.json`
 
 // RPC 不再来自这张表（C 列现在是 chainId）。
 // 运行时的 RPC 来源见 lib/rpc：手工填的 rpc.json lark 段 → Alchemy → ChainList。
@@ -342,16 +343,13 @@ async function runSync(emit: SyncEmit): Promise<SyncResult> {
     records = parseRows(await readTable(env.LARK_URL, LARK_TIMEOUT_MS))
   } catch (error) {
     const code = error instanceof LarkError ? error.code : 'LARK_FAILED'
-    const message = error instanceof Error ? error.message : String(error)
+    const message = messageOf(error)
     logger.warn({ code, message }, 'Lark 同步失败，使用本地数据')
     emit(event(SyncPhase.SOURCE, false, `Lark 拉取失败，使用本地数据：${message}`, code))
     return { changed: false, fromLark: false }
   }
 
-  const localContracts = await readJson<ContractsPayload>(CONTRACTS_FILE, {
-    businessLines: [],
-    contracts: [],
-  })
+  const localContracts = await readContracts()
   const next = toContracts(records, localContracts, [...getRegistry().chains.values()])
   emit(
     event(
@@ -408,10 +406,7 @@ async function runSync(emit: SyncEmit): Promise<SyncResult> {
   }
 
   try {
-    await writeJsonAtomic(CONTRACTS_FILE, {
-      businessLines: next.businessLines,
-      contracts: next.contracts,
-    })
+    await saveContracts(next)
     await loadRegistry()
 
     logger.info({ changes: changes.length }, 'Lark 同步已应用')
@@ -425,7 +420,7 @@ async function runSync(emit: SyncEmit): Promise<SyncResult> {
      * 更意外的情况（地址格式、id 冲突…）。仍然必须回滚 ——
      * 磁盘上留着一份跑不起来的配置，**下次重启后端就起不来了**。
      */
-    const message = error instanceof Error ? error.message : String(error)
+    const message = messageOf(error)
     logger.error({ message }, 'Lark 同步应用失败，正在回滚')
 
     const rolledBack = await rollback(localContracts)
@@ -443,10 +438,10 @@ async function runSync(emit: SyncEmit): Promise<SyncResult> {
   }
 }
 
-/** 把两个文件恢复到同步前的内容并重载。返回是否恢复成功 */
+/** 把 contracts.json 恢复到同步前的内容并重载。返回是否恢复成功 */
 async function rollback(contracts: ContractsPayload): Promise<boolean> {
   try {
-    await writeJsonAtomic(CONTRACTS_FILE, contracts)
+    await saveContracts(contracts)
     await loadRegistry()
     return true
   } catch (cause) {

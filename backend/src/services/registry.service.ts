@@ -194,7 +194,12 @@ function indexOperators(operators: readonly Operator[]): ReadonlyMap<string, Ope
   return map
 }
 
-function groupBy<T>(items: readonly T[], keyOf: (item: T) => string): ReadonlyMap<string, readonly T[]> {
+/**
+ * 按 key 分桶。除了这里建业务线索引，执行编排（按链并行发交易）和状态读取
+ * （按链批量 eth_call）也要用。它们都在 registry 之上，所以这一份放这里由它们
+ * import —— 反过来 registry 去 import 它们会成环。
+ */
+export function groupBy<T>(items: readonly T[], keyOf: (item: T) => string): ReadonlyMap<string, readonly T[]> {
   const map = new Map<string, T[]>()
   for (const item of items) {
     const key = keyOf(item)

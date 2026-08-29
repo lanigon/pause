@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useStore } from '../store'
+import { phaseLabel } from '../labels'
 import type { ExecutionEvent } from '../types'
 
 /**
@@ -42,21 +43,6 @@ const typeOf = (phase: string): 'primary' | 'success' | 'warning' | 'danger' | '
     done: 'success',
     skip: 'info',
   }) as Record<string, 'primary' | 'success' | 'warning' | 'danger' | 'info'>)[phase] ?? 'primary'
-
-const labelOf = (phase: string): string =>
-  ({
-    start: '开始',
-    decrypt: '解密密钥',
-    simulate: '预演',
-    balance: '余额',
-    skip: '跳过',
-    sign: '签名',
-    broadcast: '广播',
-    confirmed: '已确认',
-    failed: '失败',
-    done: '完成',
-    error: '错误',
-  })[phase] ?? phase
 
 /* ── tab 1：执行过程 ── */
 
@@ -113,7 +99,9 @@ watch(finished, (done) => {
 })
 
 function close(): void {
-  store.events = []
+  // 事件和失败原因一起清 —— 清理规则在 store 里，组件不直接写它的状态，
+  // 不然这里少清一个 failure，下次打开就顶着上一轮的错误横幅
+  store.clearEvents()
   tab.value = 'timeline'
 }
 
@@ -176,7 +164,7 @@ async function cancel(): Promise<void> {
           >
             <div class="gpg__step">
               <el-tag size="small" :type="typeOf(step.phase)" effect="plain">
-                {{ labelOf(step.phase) }}
+                {{ phaseLabel(step.phase) }}
               </el-tag>
               <span class="gpg__msg">{{ step.message }}</span>
             </div>
@@ -209,7 +197,7 @@ async function cancel(): Promise<void> {
               <el-table-column label="状态" width="92">
                 <template #default="{ row }">
                   <el-tag size="small" :type="typeOf(row.phase)" effect="plain">
-                    {{ labelOf(row.phase) }}
+                    {{ phaseLabel(row.phase) }}
                   </el-tag>
                 </template>
               </el-table-column>
