@@ -14,7 +14,6 @@ loadDotenv()
  *
  * 要配的环境变量只有两个，都是"这台机器特有的位置/凭证"，做不成常量：
  *   ALCHEMY_API_KEY  RPC 三级降级里的第二级，不填就降级到 Lark / ChainList
- *   LARK_URL         飞书表格链接（浏览器地址栏原样复制），不填就跳过同步、只用本地数据
  *
  * 另外读了两个但都有默认值、平时不用管：
  *   NODE_ENV         运行时标准变量
@@ -32,13 +31,6 @@ loadDotenv()
 
 /** RPC 三级降级的第二级。缺失时自动降级到 Lark / ChainList */
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY?.trim() || undefined
-
-/**
- * 飞书表格链接（一张表四列：业务线/链/RPC/合约）。
- * 直接贴浏览器地址栏里的完整 URL，app token 与 table id 由代码从里面解。
- * 缺失时跳过同步，只用本地数据。
- */
-const LARK_URL = process.env.LARK_URL?.trim() ?? ''
 
 /* ── 其余全是常量 ────────────────────────────────────────────────────── */
 
@@ -112,7 +104,6 @@ export const env = {
   SECRETS_DIR,
   GPG_BINARY,
   ALCHEMY_API_KEY,
-  LARK_URL,
   JWT_SECRET,
   JWT_TTL_SECONDS,
   GPG_JOB_TIMEOUT_MS,

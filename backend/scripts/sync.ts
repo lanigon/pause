@@ -20,21 +20,16 @@ import { spawn } from 'node:child_process'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { config as loadDotenv } from 'dotenv'
 import { readTable } from '../src/lib/lark/client.js'
-import { parseRows, toContracts } from '../src/services/sync.service.js'
+import { parseRows, toContracts } from '../src/core/sync.js'
+import { readSyncConfig } from '../src/repositories/config.repository.js'
 
-// 脚本独立运行，也要读 .env（ALCHEMY_API_KEY / LARK_URL）
+// 脚本独立运行，也要读 .env（只剩 ALCHEMY_API_KEY；表格地址在 data/sync.json）
 loadDotenv()
 
 const DATA_DIR = './data'
 const RPC_FILE = `${DATA_DIR}/rpc.json`
 const CHAINS_FILE = `${DATA_DIR}/chains.json`
 const CONTRACTS_FILE = `${DATA_DIR}/contracts.json`
-
-/**
- * Lark 表格位置。一张表四列：业务线 · 链 · RPC · 合约。
- * 不填就跳过 Lark，只用 ChainList 的公开 RPC。
- */
-const LARK_URL = process.env.LARK_URL?.trim() ?? ''
 
 interface ChainDef {
   key: string
@@ -266,8 +261,10 @@ async function checkAlchemy(chains: ChainDef[]): Promise<void> {
 /* ══ 合约同步 ══════════════════════════════════════════════════════════ */
 
 async function syncContracts(): Promise<void> {
-  if (!LARK_URL) {
-    console.log('未设置 LARK_URL，跳过合约同步。')
+  // 表格位置在 data/sync.json（不是环境变量）。不填就跳过 Lark，只用 ChainList 的公开 RPC
+  const { larkUrl } = await readSyncConfig()
+  if (!larkUrl) {
+    console.log('data/sync.json 未配置 larkUrl，跳过合约同步。')
     return
   }
 
@@ -275,7 +272,7 @@ async function syncContracts(): Promise<void> {
   // 链以 chainId 为准，所以要把 chains.json 传进去做解析
   const chains = (await readChains()) as never
   const local = await readContracts()
-  const payload = toContracts(parseRows(await readTable(LARK_URL)), local, chains)
+  const payload = toContracts(parseRows(await readTable(larkUrl)), local, chains)
 
   for (const reason of payload.skipped) console.log(`   ⚠️  跳过 ${reason}`)
 
@@ -359,7 +356,7 @@ async function main(): Promise<void> {
   npm run sync all        |  pnpm sync all        两个都同步
 
 RPC 三级降级：Lark → Alchemy → ChainList
-  Lark       需要 lark CLI + 环境变量 LARK_URL（一张表：业务线/链/chainId/合约）
+  Lark       需要 lark CLI + data/sync.json 的 larkUrl（一张表：业务线/链/chainId/合约）
   Alchemy    只要 ALCHEMY_API_KEY，运行时现拼，不用同步
   ChainList  公开数据，直接可用
 `)

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { OperationKind } from '../src/services/operations.js'
+import { OperationKind } from '../src/core/operations.js'
 import { BatchItemStatus } from '../src/lib/web3/types.js'
 
 /**
@@ -23,8 +23,8 @@ const states = new Map([
 ])
 
 // 只替掉「配置从哪来」这三个查询，其余（如纯函数 groupBy）用真的
-vi.mock('../src/services/registry.service.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../src/services/registry.service.js')>()),
+vi.mock('../src/core/config.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/core/config.js')>()),
   getChain: (key: string) => ({ key, name: 'Morph', type: 'evm', chainId: 2818, explorer: 'https://e', confirmations: 1, symbol: 'E', decimals: 18, multicall3: null }),
   getContract: (id: string) => contracts.find((c) => c.id === id),
   contractsOf: () => contracts,
@@ -52,9 +52,9 @@ vi.mock('../src/lib/web3/chains.js', async () => {
   }
 })
 
-const { execute, assertAuthorized } = await import('../src/services/execution.service.js')
+const { execute, assertAuthorized } = await import('../src/core/execution.js')
 // 只读状态查询已拆到 contractState.service
-const { readStates } = await import('../src/services/contractState.service.js')
+const { readStates } = await import('../src/core/contractState.js')
 
 const signer = { chainType: 'evm', address: '0xSIGNER', unlock: 'passphrase' } as never
 const actor = { address: '0xALICE', label: 'Alice', role: 'admin' } as never

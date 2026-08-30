@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { OperationKind, expectedPausedState, labelOf, requiredPausedState } from '../src/services/operations.js'
+import {
+  CONTRACT_READS,
+  OperationKind,
+  expectedPausedState,
+  labelOf,
+  requiredPausedState,
+} from '../src/core/operations.js'
+import { PAUSABLE_ABI } from '../src/lib/web3/evm/abi.js'
 import { KeyedMutex } from '../src/lib/utils/mutex.js'
 
 /**
@@ -89,5 +96,45 @@ describe('KeyedMutex', () => {
   it('返回值原样透传', async () => {
     const mutex = new KeyedMutex()
     expect(await mutex.runExclusive('k', async () => ({ v: 42 }))).toEqual({ v: 42 })
+  })
+})
+
+
+/**
+ * 「平台能做哪些操作」这件事同时活在两个层：
+ *
+ *   core/operations.ts        操作的语义（有哪些、前置条件、预期结果）
+ *   lib/web3/evm/abi.ts       它在 EVM 上的编码（Solidity ABI）
+ *
+ * 分开是对的 —— core 是链无关的，Solidity ABI 只对 EVM 成立，
+ * 塞进 core 会让链无关层认识 Solidity；而 Tron 压根不用 ABI（要的是方法签名字符串）。
+ *
+ * 但两边必须同步：往 OperationKind 里加一种操作却忘了加 ABI，
+ * **编译期查不出来**，要等到真的去 encodeFunctionData 才炸 ——
+ * 而那时人已经点了「批量暂停」并输过 CONFIRM 了。所以用测试守着。
+ */
+describe('操作清单 ↔ EVM ABI 必须同步', () => {
+  const abiMethods = new Set(PAUSABLE_ABI.map((fragment) => fragment.name))
+
+  it('★ 每一种操作都能在 EVM 上编码', () => {
+    for (const kind of Object.values(OperationKind)) {
+      expect(abiMethods, `操作 ${kind} 在 PAUSABLE_ABI 里没有对应方法`).toContain(kind)
+    }
+  })
+
+  it('★ 每个要读的字段都在 ABI 里', () => {
+    for (const read of CONTRACT_READS) {
+      expect(abiMethods, `要读 ${read.method}，但 ABI 里没有`).toContain(read.method)
+    }
+  })
+
+  it('ABI 里不留用不到的方法（每多一个都是白读一次链）', () => {
+    const used = new Set<string>([
+      ...Object.values(OperationKind),
+      ...CONTRACT_READS.map((r) => r.method),
+    ])
+    for (const method of abiMethods) {
+      expect(used, `ABI 里的 ${method}() 没有任何操作或读取用到它`).toContain(method)
+    }
   })
 })

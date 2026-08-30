@@ -42,7 +42,7 @@ const CHAINS = [
   { key: 'morph', type: 'evm', chainId: 2818 },
   { key: 'tron', type: 'tron', chainId: 728126428 },
 ]
-vi.mock('../src/services/registry.service.js', () => ({
+vi.mock('../src/core/config.js', () => ({
   loadRegistry: () => loadRegistry(),
   getRegistry: () => ({ chains: new Map(CHAINS.map((c) => [c.key, c])) }),
 }))
@@ -50,10 +50,9 @@ vi.mock('../src/lib/rpc/rpcProvider.js', () => ({ rpcProvider: { load: async () 
 
 async function loadService() {
   vi.resetModules()
-  process.env.LARK_URL = 'https://demo.feishu.cn/base/AbC123?table=tblXYZ&view=vewABC'
   const env = await import('../src/config/env.js')
   vi.spyOn(env.env, 'DATA_DIR', 'get').mockReturnValue(dataDir as './data')
-  return import('../src/services/sync.service.js')
+  return import('../src/core/sync.js')
 }
 
 const row = (over: Record<string, string> = {}) => ({
@@ -72,6 +71,10 @@ beforeEach(async () => {
   await mkdir(dataDir, { recursive: true })
   await writeFile(join(dataDir, 'contracts.json'), JSON.stringify(LOCAL))
   await writeFile(join(dataDir, 'rpc.json'), JSON.stringify({ syncedAt: '', lark: {}, chainlist: {} }))
+  await writeFile(
+    join(dataDir, 'sync.json'),
+    JSON.stringify({ larkUrl: 'https://demo.feishu.cn/base/AbC123?table=tblXYZ&view=vewABC' }),
+  )
   events = []
   readTable.mockReset()
   loadRegistry.mockReset().mockResolvedValue(undefined)
@@ -240,12 +243,12 @@ describe('Lark 同步', () => {
     expect(events[0]?.code).toBe('THROTTLED')
   })
 
-  it('未配置 LARK_URL 时安静降级，不当成错误', async () => {
+  it('未配置 larkUrl 时安静降级，不当成错误', async () => {
     vi.resetModules()
-    process.env.LARK_URL = ''
+    await writeFile(join(dataDir, 'sync.json'), JSON.stringify({ larkUrl: '' }))
     const envModule = await import('../src/config/env.js')
     vi.spyOn(envModule.env, 'DATA_DIR', 'get').mockReturnValue(dataDir as './data')
-    const { syncFromLark } = await import('../src/services/sync.service.js')
+    const { syncFromLark } = await import('../src/core/sync.js')
 
     const result = await syncFromLark(emit, true)
 

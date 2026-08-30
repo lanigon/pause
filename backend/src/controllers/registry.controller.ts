@@ -1,27 +1,24 @@
 import type { Request, Response } from 'express'
 import { z } from 'zod'
-import { dto, getRegistry as getRegistrySnapshot, loadRegistry } from '../services/registry.service.js'
-import { activeCount } from '../services/batch.service.js'
-import * as logRepo from '../repositories/log.repository.js'
-import { tx } from '../lib/web3/index.js'
-import { readBusinessLineStates, readStates } from '../services/contractState.service.js'
+import * as registryService from '../services/registry.service.js'
+import type { SyncEvent } from '../core/sync.js'
 import { currentOperator } from '../middlewares/auth.middleware.js'
+import { validated } from '../middlewares/validate.middleware.js'
 import { ok } from '../lib/utils/response.js'
 import { openSse } from '../lib/utils/sse.js'
-import { syncFromLark, type SyncEvent } from '../services/sync.service.js'
-import { validated } from '../middlewares/validate.middleware.js'
-import { AppError, ErrorCode, messageOf } from '../lib/utils/errors.js'
 
 /**
  * 前端渲染的唯一数据源：一个接口拿全 链+RPC+合约+业务线。
+ *
+ * 这一层只管 HTTP：ETag、SSE 帧、状态码、参数解析。
+ * 编排在 services/registry.service.ts，能力在 core/。
  *
  * **不按人裁剪** —— 只有一份预计算好的 dto，所有能登录的人看到的内容都一样。
  * 角色的区别只在能不能动（viewer 只读，由 requireWriteRole 在写接口上拦），
  * 别把这里当成权限边界。
  */
 export function getRegistry(req: Request, res: Response): void {
-  // 内存里预计算好的，直接给
-  const payload = dto()
+  const payload = registryService.snapshot()
 
   // 配置没变就回 304，前端频繁轮询时连响应体都不用传
   const etag = `W/"${payload.configVersion}"`
@@ -44,23 +41,16 @@ export function getRegistry(req: Request, res: Response): void {
  *     event: apply     写入并重载 / 无需更新
  *     event: registry  最终数据，前端拿这个渲染
  *
- * **Lark 出任何问题都不影响拿到数据** —— 事件里说明原因，registry 照发本地版本。
- * 这是紧急暂停工具，可用性优先于数据新鲜度。
  * 不想等同步的场景（轮询、降级）走 GET /registry，纯本地、立刻返回。
  */
 export async function getRegistryStream(req: Request, res: Response): Promise<void> {
-  const force = req.query.force === '1'
   const stream = openSse(res)
-
   try {
-    const result = await syncFromLark((event: SyncEvent) => stream.emit(event.phase, event), force)
-    // 无论同步成没成，最后一定把数据发出去
-    stream.emit('registry', { ...dto(), synced: result })
-  } catch (error) {
-    // 同步服务自己已经吞掉了所有可预期的失败，走到这儿说明是意料外的
-    const message = messageOf(error)
-    stream.emit('apply', { phase: 'apply', at: Date.now(), ok: false, message, code: 'SYNC_CRASHED' })
-    stream.emit('registry', { ...dto(), synced: { changed: false, fromLark: false } })
+    const payload = await registryService.syncAndSnapshot(
+      (event: SyncEvent) => stream.emit(event.phase, event),
+      req.query.force === '1',
+    )
+    stream.emit('registry', payload)
   } finally {
     stream.close()
   }
@@ -78,69 +68,27 @@ export const statesQuerySchema = z.object({
  */
 export async function getStates(req: Request, res: Response): Promise<void> {
   const query = validated<z.infer<typeof statesQuerySchema>>(req)
-
-  if (query.businessLine) {
-    ok(res, Object.fromEntries(await readBusinessLineStates(query.businessLine)))
-    return
-  }
-
-  const ids = query.ids?.split(',').map((s) => s.trim()).filter(Boolean) ?? []
-  if (ids.length === 0) throw new AppError(ErrorCode.BAD_REQUEST, '需要 businessLine 或 ids 参数')
-  ok(res, Object.fromEntries(await readStates(ids)))
+  ok(res, Object.fromEntries(await registryService.states(query)))
 }
 
 /** 热重载配置（admin） */
 export async function postReload(req: Request, res: Response): Promise<void> {
-  if (currentOperator(req).role !== 'admin') {
-    throw new AppError(ErrorCode.FORBIDDEN, '只有 admin 可以重载配置')
-  }
-  const registry = await loadRegistry()
-  ok(res, { configVersion: registry.configVersion })
+  ok(res, await registryService.reload(currentOperator(req)))
 }
 
 /* ══ 系统状态 ══════════════════════════════════════════════════════════ */
 
-const startedAt = Date.now()
-
 /** 存活探针，无需认证 */
 export function getHealth(_req: Request, res: Response): void {
-  ok(res, { ok: true, uptimeMs: Date.now() - startedAt })
+  ok(res, registryService.health())
 }
 
 /** 后端状态快照：前端顶栏用它显示健康指示 */
 export async function getState(_req: Request, res: Response): Promise<void> {
-  const registry = getRegistrySnapshot()
-  ok(res, {
-    configVersion: registry.configVersion,
-    loadedAt: registry.loadedAt,
-    chains: registry.chains.size,
-    contracts: registry.contracts.size,
-    activeJobs: activeCount(),
-    logCount: await logRepo.count(),
-  })
+  ok(res, await registryService.state())
 }
 
 /** 各链 RPC 健康：延迟与区块高度 */
 export async function getRpcHealth(_req: Request, res: Response): Promise<void> {
-  const chains = [...getRegistrySnapshot().chains.values()]
-  const results = await Promise.all(
-    chains.map(async (chain) => {
-      try {
-        const results = await tx(chain.type).checkHealth(chain)
-        // rawUrl 只在进程内用来对回节点，含 apiKey，**绝不下发**
-        return {
-          chain: chain.key,
-          rpcs: results.map(({ rawUrl: _rawUrl, ...safe }) => safe),
-        }
-      } catch (error) {
-        // 一条链没有可用 RPC 不该让整个接口挂掉，但要明确说出来
-        return {
-          chain: chain.key,
-          rpcs: [],
-          error: error instanceof Error ? error.message : '探测失败',
-        }
-      }
-    }),
-  )
-  ok(res, results)
+  ok(res, await registryService.rpcHealth())
 }

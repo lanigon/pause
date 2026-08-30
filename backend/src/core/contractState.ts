@@ -2,7 +2,8 @@ import type { ContractDef } from '../models/contract.model.js'
 import type { ReadCall, ReadResult } from '../lib/web3/types.js'
 import { tx } from '../lib/web3/chains.js'
 import { CONTRACT_READS } from './operations.js'
-import { contractsOf, getChain, getContract, groupBy } from './registry.service.js'
+import { contractsOf, getChain, getContract } from './config.js'
+import { groupBy } from '../lib/utils/collection.js'
 import { logger } from '../lib/utils/logger.js'
 
 /**

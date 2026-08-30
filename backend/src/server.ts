@@ -1,10 +1,10 @@
 import { createApp } from './app.js'
 import { env, isProduction } from './config/env.js'
-import { getRegistry, loadRegistry } from './services/registry.service.js'
+import { getRegistry, loadRegistry } from './core/config.js'
 import { rpcProvider } from './lib/rpc/rpcProvider.js'
 import { readRpcFile } from './repositories/config.repository.js'
 import * as logRepo from './repositories/log.repository.js'
-import { abortAll } from './services/batch.service.js'
+import { abortAll } from './services/gpg.service.js'
 import { resetAll, tx } from './lib/web3/index.js'
 import { logger } from './lib/utils/logger.js'
 

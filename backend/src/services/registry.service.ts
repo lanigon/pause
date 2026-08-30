@@ -1,211 +1,124 @@
-import { loadRawConfig, type RawConfigBundle } from '../repositories/config.repository.js'
-import { assertRegistered, meta, resetAll } from '../lib/web3/index.js'
-import type { Chain } from '../models/chain.model.js'
-import type { BusinessLine, ContractDef } from '../models/contract.model.js'
-import type { Operator } from '../models/operator.model.js'
-import { listOperations } from './operations.js'
-import { AppError, ErrorCode, notFound } from '../lib/utils/errors.js'
-import { logger } from '../lib/utils/logger.js'
-import { rpcProvider } from '../lib/rpc/rpcProvider.js'
+import { dto, getRegistry, loadRegistry } from '../core/config.js'
+import { readBusinessLineStates, readStates, type ContractState } from '../core/contractState.js'
+import { SyncPhase, syncFromLark, type SyncEvent, type SyncResult } from '../core/sync.js'
+import { activeCount } from './gpg.service.js'
+import * as logService from './log.service.js'
+import type { AuthContext } from '../core/identity.js'
+import { tx } from '../lib/web3/index.js'
+import { AppError, ErrorCode, messageOf } from '../lib/utils/errors.js'
 
 /**
- * 配置注册表：进程内唯一的配置真相来源。
+ * 服务于 registry.controller 的六个接口。
  *
- * 分工：
- *   config.repository → 读磁盘 + 单文件 schema 校验
- *   registry.service  → 跨文件引用完整性校验 + 建索引 + 生成下发前端的 DTO
+ * 这一层只做**编排**：把 core/ 里的能力按接口的需要串起来。
+ * 配置本身的真相在 core/config.ts，同步在 core/sync.ts，读链上状态在
+ * core/contractState.ts —— 它们都不知道 HTTP 的存在，所以能各自单测。
+ *
+ * HTTP 的部分（ETag、SSE 帧、状态码）留在 controller，不下沉到这里。
  */
 
-interface RegistryDto {
-  readonly configVersion: string
-  readonly businessLines: readonly BusinessLine[]
-  readonly chains: readonly (Chain & { rpcs: readonly string[] })[]
-  readonly contracts: readonly ContractDef[]
-  readonly operations: readonly unknown[]
-}
-
-export interface Registry {
-  readonly configVersion: string
-  readonly loadedAt: number
-  readonly chains: ReadonlyMap<string, Chain>
-  readonly businessLines: readonly BusinessLine[]
-  readonly contracts: ReadonlyMap<string, ContractDef>
-  readonly operators: ReadonlyMap<string, Operator>
-  readonly byBusinessLine: ReadonlyMap<string, readonly ContractDef[]>
-}
-
-let current: Registry | null = null
-
-export function getRegistry(): Registry {
-  if (!current) throw new AppError(ErrorCode.INTERNAL, '配置尚未加载，服务未正确启动')
-  return current
-}
-
-export const getConfigVersion = (): string => getRegistry().configVersion
-
-/** 启动与热重载都走这里。校验不过就抛错，绝不让半个错误配置生效。 */
-export async function loadRegistry(configDir?: string): Promise<Registry> {
-  const next = build(await loadRawConfig(configDir))
-  current = next
-  resetAll() // 换了配置就得丢掉旧 RPC 连接
-  cachedDto = null // 预计算的下发数据要作废重算
-
-  // 提前算好，第一个请求就不用等
-  dto()
-
-  logger.info(
-    {
-      configVersion: next.configVersion,
-      chains: next.chains.size,
-      contracts: next.contracts.size,
-      businessLines: next.businessLines.length,
-      operators: next.operators.size,
-    },
-    '配置已加载',
-  )
-  return next
-}
-
-// ── 跨文件引用完整性校验 ────────────────────────────────────────────────────
-
-function build(raw: RawConfigBundle): Registry {
-  const problems: string[] = []
-
-  // 每个链族都必须已注册 adapter，否则运行时才发现就晚了
-  assertRegistered(raw.chains.map((c) => c.type))
-
-  const chains = uniqueIndex(raw.chains, (c) => c.key, 'chains.json 链 key 重复', problems)
-  const businessLineIds = new Set(raw.businessLines.map((b) => b.id))
-  const contracts = uniqueIndex(raw.contracts, (c) => c.id, 'contracts.json 合约 id 重复', problems)
-
-  for (const contract of raw.contracts) {
-    const where = `合约 ${contract.id}`
-    const chain = chains.get(contract.chain)
-
-    if (!chain) {
-      problems.push(`${where}: 引用了不存在的链 "${contract.chain}"`)
-    } else if (!meta(chain.type).isValidAddress(contract.address)) {
-      // Tron 地址配到 EVM 链上是最常见的手滑
-      problems.push(`${where}: 地址 "${contract.address}" 不符合 ${chain.type} 链的格式`)
-    }
-
-    if (!businessLineIds.has(contract.businessLine)) {
-      problems.push(`${where}: 引用了不存在的业务线 "${contract.businessLine}"`)
-    }
-  }
-
-  if (problems.length > 0) {
-    throw new AppError(
-      ErrorCode.INTERNAL,
-      `配置校验失败（${problems.length} 项）：\n  - ${problems.join('\n  - ')}`,
-    )
-  }
-
-  return {
-    configVersion: raw.configVersion,
-    loadedAt: Date.now(),
-    chains,
-    businessLines: raw.businessLines,
-    contracts,
-    operators: indexOperators(raw.operators),
-    byBusinessLine: groupBy(raw.contracts, (c) => c.businessLine),
-  }
-}
-
-// ── 查询 ────────────────────────────────────────────────────────────────────
-
-export function getChain(chainKey: string): Chain {
-  const chain = getRegistry().chains.get(chainKey)
-  if (!chain) throw notFound(`链不存在: ${chainKey}`)
-  return chain
-}
-
-export function getContract(contractId: string): ContractDef {
-  const contract = getRegistry().contracts.get(contractId)
-  if (!contract) throw notFound(`合约不存在: ${contractId}`)
-  return contract
-}
-
-export const findOperator = (normalizedAddress: string): Operator | undefined =>
-  getRegistry().operators.get(normalizedAddress.toLowerCase())
-
-export const contractsOf = (businessLine: string): readonly ContractDef[] =>
-  getRegistry().byBusinessLine.get(businessLine) ?? []
-
-// ── 下发前端的 DTO ──────────────────────────────────────────────────────────
-
+/** GET /registry —— 纯本地，立刻返回。ETag 由 controller 加 */
+export const snapshot = (): ReturnType<typeof dto> => dto()
 
 /**
- * 下发前端的数据 —— **加载配置时就算好，放在内存里，请求来了直接给**。
+ * GET /registry/sync —— 先跟 Lark 对一遍再给数据。
  *
- * 前端会频繁拉这个接口（切业务线、刷新状态），每次都重新过滤链、拼 RPC、
- * 展开对象是白费的。所以在 loadRegistry() 时预计算一次，请求路径上零计算。
- *
- * 只有一份 —— 角色即权限，所有能登录的人看到的内容都一样，
- * 区别只在能不能动（viewer 只读，由后端的 requireWriteRole 拦）。
+ * emit 由 controller 注入（它才知道怎么写 SSE 帧）。
+ * **同步出任何问题都不影响拿到数据**：这是紧急暂停工具，可用性优先于新鲜度，
+ * 所以异常在这里就地转成一条事件，最后照样返回本地版本。
  */
-let cachedDto: RegistryDto | null = null
+export async function syncAndSnapshot(
+  emit: (event: SyncEvent) => void,
+  force: boolean,
+): Promise<ReturnType<typeof dto> & { synced: SyncResult }> {
+  try {
+    const synced = await syncFromLark(emit, force)
+    return { ...dto(), synced }
+  } catch (error) {
+    // 同步服务自己已经吞掉了所有可预期的失败，走到这儿说明是意料外的
+    emit({
+      phase: SyncPhase.APPLY,
+      at: Date.now(),
+      ok: false,
+      message: messageOf(error),
+      code: 'SYNC_CRASHED',
+    })
+    return { ...dto(), synced: { changed: false, fromLark: false } }
+  }
+}
 
-export function dto(): RegistryDto {
-  if (cachedDto) return cachedDto
+/**
+ * GET /states —— 读链上状态。二选一：整条业务线，或指定一批合约 id。
+ * 前端平时自己 multicall，这个接口是它没有可用 RPC 时的兜底。
+ */
+export function states(query: {
+  businessLine?: string
+  ids?: string
+}): Promise<ReadonlyMap<string, ContractState>> {
+  if (query.businessLine) return readBusinessLineStates(query.businessLine)
 
+  const ids = query.ids?.split(',').map((s) => s.trim()).filter(Boolean) ?? []
+  if (ids.length === 0) throw new AppError(ErrorCode.BAD_REQUEST, '需要 businessLine 或 ids 参数')
+  return readStates(ids)
+}
+
+/** POST /registry/reload —— 热重载。只有 admin 能做 */
+export async function reload(actor: AuthContext): Promise<{ configVersion: string }> {
+  if (actor.role !== 'admin') {
+    throw new AppError(ErrorCode.FORBIDDEN, '只有 admin 可以重载配置')
+  }
+  const registry = await loadRegistry()
+  return { configVersion: registry.configVersion }
+}
+
+/* ══ 系统状态 ══════════════════════════════════════════════════════════ */
+
+const startedAt = Date.now()
+
+/** GET /health —— 存活探针，无需认证 */
+export const health = (): { ok: true; uptimeMs: number } => ({
+  ok: true,
+  uptimeMs: Date.now() - startedAt,
+})
+
+/** GET /state —— 后端状态快照，全部读内存，前端顶栏的健康指示用 */
+export async function state(): Promise<{
+  configVersion: string
+  loadedAt: number
+  chains: number
+  contracts: number
+  activeJobs: number
+  logCount: number
+}> {
   const registry = getRegistry()
-  const contracts = [...registry.contracts.values()]
-
-  // 只保留合约实际涉及的链；RPC 由后端提供，且只给公开的
-  const usedChains = new Set(contracts.map((contract) => contract.chain))
-  const chains = [...registry.chains.values()]
-    .filter((chain) => usedChains.has(chain.key))
-    .map((chain) => ({ ...chain, rpcs: rpcProvider.publicUrlsFor(chain) }))
-
-  cachedDto = Object.freeze({
+  return {
     configVersion: registry.configVersion,
-    businessLines: registry.businessLines,
-    chains,
-    contracts,
-    operations: listOperations(),
-  })
-  return cachedDto
-}
-
-// ── 小工具 ──────────────────────────────────────────────────────────────────
-
-function uniqueIndex<T>(
-  items: readonly T[],
-  keyOf: (item: T) => string,
-  duplicateMessage: string,
-  problems: string[],
-): ReadonlyMap<string, T> {
-  const map = new Map<string, T>()
-  for (const item of items) {
-    const key = keyOf(item)
-    if (map.has(key)) problems.push(`${duplicateMessage}: "${key}"`)
-    map.set(key, item)
+    loadedAt: registry.loadedAt,
+    chains: registry.chains.size,
+    contracts: registry.contracts.size,
+    activeJobs: activeCount(),
+    logCount: await logService.count(),
   }
-  return map
-}
-
-/** 登录白名单 */
-function indexOperators(operators: readonly Operator[]): ReadonlyMap<string, Operator> {
-  const map = new Map<string, Operator>()
-  for (const operator of operators.filter((o) => o.enabled)) {
-    map.set(operator.address.toLowerCase(), operator)
-  }
-  return map
 }
 
 /**
- * 按 key 分桶。除了这里建业务线索引，执行编排（按链并行发交易）和状态读取
- * （按链批量 eth_call）也要用。它们都在 registry 之上，所以这一份放这里由它们
- * import —— 反过来 registry 去 import 它们会成环。
+ * GET /state/rpc —— 各链 RPC 健康：延迟与区块高度。
+ * 这个会真的去探测每个节点，比 /state 慢一个量级，所以是独立接口。
  */
-export function groupBy<T>(items: readonly T[], keyOf: (item: T) => string): ReadonlyMap<string, readonly T[]> {
-  const map = new Map<string, T[]>()
-  for (const item of items) {
-    const key = keyOf(item)
-    const bucket = map.get(key)
-    if (bucket) bucket.push(item)
-    else map.set(key, [item])
-  }
-  return map
+export async function rpcHealth(): Promise<
+  readonly { chain: string; rpcs: readonly unknown[]; error?: string }[]
+> {
+  const chains = [...getRegistry().chains.values()]
+  return Promise.all(
+    chains.map(async (chain) => {
+      try {
+        const results = await tx(chain.type).checkHealth(chain)
+        // rawUrl 只在进程内用来对回节点，含 apiKey，**绝不下发**
+        return { chain: chain.key, rpcs: results.map(({ rawUrl: _rawUrl, ...safe }) => safe) }
+      } catch (error) {
+        // 一条链没有可用 RPC 不该让整个接口挂掉，但要明确说出来
+        return { chain: chain.key, rpcs: [], error: messageOf(error) }
+      }
+    }),
+  )
 }

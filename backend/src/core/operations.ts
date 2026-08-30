@@ -6,6 +6,12 @@
  *
  * GPG 批量执行是最高危的入口，它接受的 action 必须是编译期可穷举的受控集合，
  * 不能让调用方传任意方法名进来（那等于开放"调任意合约方法"的能力）。
+ *
+ * ⚠ 加一种操作要**同时**改 lib/web3/evm/abi.ts —— 这里定的是语义，那边是它在
+ *   EVM 上的编码。漏改编译期查不出来，会等到 encodeFunctionData 才炸，
+ *   而那时人已经点了按钮、输过 CONFIRM 了。
+ *   executor.test.ts 的「操作清单 ↔ EVM ABI 必须同步」守着这条。
+ *   钱包模式还要改 frontend/src/chain/abi.ts（跨包，测试管不到，前端会挡下来报人话）。
  */
 export enum OperationKind {
   PAUSE = 'pause',

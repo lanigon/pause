@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { loadRegistry, getChain, getContract, findOperator, contractsOf, dto } from '../src/services/registry.service.js'
+import { loadRegistry, getChain, getContract, findOperator, contractsOf, dto } from '../src/core/config.js'
 import { rpcProvider } from '../src/lib/rpc/rpcProvider.js'
 
 /**

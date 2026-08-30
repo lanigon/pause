@@ -1,6 +1,6 @@
 import type { NextFunction, Request, Response } from 'express'
 import type { OperatorRole } from '../models/operator.model.js'
-import { toAuthContext, verifyToken, type AuthContext } from '../services/auth.service.js'
+import { toAuthContext, verifyToken, type AuthContext } from '../core/identity.js'
 import { AppError, ErrorCode } from '../lib/utils/errors.js'
 
 /** 能执行写操作的角色。viewer 只能看 */

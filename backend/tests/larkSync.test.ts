@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseRows, toContracts } from '../src/services/sync.service.js'
+import { parseRows, toContracts } from '../src/core/sync.js'
 import { field, type LarkRow } from '../src/lib/lark/client.js'
 import type { Chain } from '../src/models/chain.model.js'
 

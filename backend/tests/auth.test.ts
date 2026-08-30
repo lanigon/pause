@@ -14,14 +14,13 @@ import { Wallet } from 'ethers'
 
 // registry 是模块级单例，登录会去查它 —— 用 mock 隔离掉
 const whitelist = new Map<string, { label: string; role: string }>()
-vi.mock('../src/services/registry.service.js', () => ({
+vi.mock('../src/core/config.js', () => ({
   findOperator: (addr: string) => whitelist.get(addr.toLowerCase()),
   getConfigVersion: () => 'sha256:test',
 }))
 
-const { login, verifyToken, toAuthContext, __clearUsedSignatures } = await import(
-  '../src/services/auth.service.js'
-)
+const { login, __clearUsedSignatures } = await import('../src/services/auth.service.js')
+const { verifyToken, toAuthContext } = await import('../src/core/identity.js')
 
 const wallet = new Wallet('0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80')
 

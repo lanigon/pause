@@ -1,9 +1,9 @@
 import type { Request, Response } from 'express'
 import { z } from 'zod'
-import { OperationKind } from '../services/operations.js'
-import { cancelFor, plan, run } from '../services/batch.service.js'
+import { OperationKind } from '../core/operations.js'
+import { cancelFor, plan, run } from '../services/gpg.service.js'
 import { currentOperator } from '../middlewares/auth.middleware.js'
-import type { ExecutionEvent } from '../services/execution.service.js'
+import type { ExecutionEvent } from '../core/execution.js'
 import { ok } from '../lib/utils/response.js'
 import { openSse } from '../lib/utils/sse.js'
 

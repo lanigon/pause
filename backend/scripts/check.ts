@@ -17,7 +17,7 @@ process.env.LOG_LEVEL ??= 'silent'
 import { spawn } from 'node:child_process'
 import { stat } from 'node:fs/promises'
 import { env } from '../src/config/env.js'
-import { loadRawConfig, readRpcFile } from '../src/repositories/config.repository.js'
+import { loadRawConfig, readRpcFile, readSyncConfig } from '../src/repositories/config.repository.js'
 import { hasCommand } from '../src/lib/lark/client.js'
 import { GpgKey, LOW_PIN_RETRIES, gpgBinary, gpgEnv, readCardStatus } from '../src/lib/keys/gpg.js'
 import { rpcProvider } from '../src/lib/rpc/rpcProvider.js'
@@ -188,10 +188,16 @@ async function checkLark(): Promise<void> {
   const mcp = await hasCommand('lark-mcp')
   report(mcp ? 'ok' : 'warn', 'lark MCP', mcp ? '已安装' : '未安装（不影响 sync）')
 
-  if (!env.LARK_URL) {
-    return report('warn', 'LARK_URL', '未配置', '不配就只用本地 data/，配了才能同步。填多维表格的地址栏链接')
+  const { larkUrl } = await readSyncConfig()
+  if (!larkUrl) {
+    return report(
+      'warn',
+      'data/sync.json',
+      '未配置 larkUrl',
+      '不配就只用本地 data/，配了才能同步。填多维表格的地址栏链接',
+    )
   }
-  report('ok', 'LARK_URL', env.LARK_URL.slice(0, 60) + (env.LARK_URL.length > 60 ? '…' : ''))
+  report('ok', 'data/sync.json', larkUrl.slice(0, 60) + (larkUrl.length > 60 ? '…' : ''))
 
   if (cli) {
     report('ok', '能否拉取数据', '可以 —— 跑 npm run sync 把飞书的合约清单同步到本地 data/')

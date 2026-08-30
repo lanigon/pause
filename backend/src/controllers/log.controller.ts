@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express'
 import { z } from 'zod'
-import * as logRepo from '../repositories/log.repository.js'
+import * as logService from '../services/log.service.js'
 import type { OperationLogInput } from '../repositories/log.repository.js'
 import { currentOperator } from '../middlewares/auth.middleware.js'
 import { validated } from '../middlewares/validate.middleware.js'
@@ -18,7 +18,7 @@ export const logQuerySchema = z.object({
 
 /** 前端启动时拉历史交易记录 */
 export async function getLogs(req: Request, res: Response): Promise<void> {
-  ok(res, await logRepo.query(validated<z.infer<typeof logQuerySchema>>(req)))
+  ok(res, await logService.list(validated<z.infer<typeof logQuerySchema>>(req)))
 }
 
 /** 日期选择器用：这段时间里每天各有几笔交易 */
@@ -30,18 +30,17 @@ export const logDailySchema = z.object({
 })
 
 export async function getDailyCounts(req: Request, res: Response): Promise<void> {
-  ok(res, await logRepo.dailyCounts(validated<z.infer<typeof logDailySchema>>(req)))
+  ok(res, await logService.dailyCounts(validated<z.infer<typeof logDailySchema>>(req)))
 }
 
 /**
- * 钱包模式下前端上报一条 —— **广播成功之后才报**，没发出去的不记。
- * 地址由后端从 JWT 填，请求体里的任何身份字段都会被忽略。
- *
+ * 钱包模式下前端上报一条。
  * 请求体的形状直接用日志表推导出来的那份，不在这里另写一遍。
  */
 export { operationLogInputSchema as logInputSchema } from '../repositories/log.repository.js'
 
 export async function postLog(req: Request, res: Response): Promise<void> {
   const input = req.body as OperationLogInput
-  ok(res, await logRepo.record(currentOperator(req).address, input), 201)
+  // 身份从 JWT 来，不看请求体
+  ok(res, await logService.record(currentOperator(req).address, input), 201)
 }

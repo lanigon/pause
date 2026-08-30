@@ -15,9 +15,10 @@ import {
   labelOf,
   requiredPausedState,
 } from './operations.js'
-import type { AuthContext } from '../services/auth.service.js'
-import { getChain, groupBy } from '../services/registry.service.js'
-import { readStates } from './contractState.service.js'
+import type { AuthContext } from './identity.js'
+import { getChain } from './config.js'
+import { groupBy } from '../lib/utils/collection.js'
+import { readStates } from './contractState.js'
 import { AppError, ErrorCode, messageOf } from '../lib/utils/errors.js'
 import { logger } from '../lib/utils/logger.js'
 

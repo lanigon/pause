@@ -61,7 +61,7 @@ beforeAll(async () => {
     { syncedAt: '', lark: {}, chainlist: { morph: ['https://rpc.morphl2.io'] } },
     '',
   )
-  const { loadRegistry } = await import('../src/services/registry.service.js')
+  const { loadRegistry } = await import('../src/core/config.js')
   await loadRegistry(dir)
   const { createApp } = await import('../src/app.js')
   app = createApp()

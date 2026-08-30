@@ -1,12 +1,16 @@
 import { messageOf } from '../lib/utils/errors.js'
 import { createHash } from 'node:crypto'
-import { readContracts, saveContracts, type ContractsFile } from '../repositories/config.repository.js'
+import {
+  readContracts,
+  readSyncConfig,
+  saveContracts,
+  type ContractsFile,
+} from '../repositories/config.repository.js'
 import { field, LarkError, readTable, type LarkRow } from '../lib/lark/client.js'
 import { KeyedMutex } from '../lib/utils/mutex.js'
 import { logger } from '../lib/utils/logger.js'
-import { env } from '../config/env.js'
 import { contractsFileSchema } from '../config/config.schema.js'
-import { getRegistry, loadRegistry } from './registry.service.js'
+import { getRegistry, loadRegistry } from './config.js'
 import type { Chain } from '../models/chain.model.js'
 import type { ContractDef } from '../models/contract.model.js'
 
@@ -331,8 +335,11 @@ export async function syncFromLark(emit: SyncEmit, force = false): Promise<SyncR
 }
 
 async function runSync(emit: SyncEmit): Promise<SyncResult> {
-  if (!env.LARK_URL) {
-    emit(event(SyncPhase.SOURCE, false, '未配置 LARK_URL，使用本地数据', 'LARK_NOT_CONFIGURED'))
+  const { larkUrl } = await readSyncConfig()
+  if (!larkUrl) {
+    emit(
+      event(SyncPhase.SOURCE, false, '未配置 data/sync.json 的 larkUrl，使用本地数据', 'LARK_NOT_CONFIGURED'),
+    )
     return { changed: false, fromLark: false }
   }
 
@@ -340,7 +347,7 @@ async function runSync(emit: SyncEmit): Promise<SyncResult> {
   emit(event(SyncPhase.SOURCE, true, '正在从 Lark 拉取合约清单…'))
   let records: readonly LarkRecord[]
   try {
-    records = parseRows(await readTable(env.LARK_URL, LARK_TIMEOUT_MS))
+    records = parseRows(await readTable(larkUrl, LARK_TIMEOUT_MS))
   } catch (error) {
     const code = error instanceof LarkError ? error.code : 'LARK_FAILED'
     const message = messageOf(error)

@@ -124,6 +124,32 @@ export async function loadRawConfig(configDir: string = env.DATA_DIR): Promise<R
 export const readRpcFile = (dataDir: string = env.DATA_DIR): Promise<RpcFile> =>
   readJson<RpcFile>(join(resolve(dataDir), 'rpc.json'), EMPTY_RPC_FILE)
 
+/**
+ * data/sync.json —— 数据从哪来。
+ *
+ * 放在 data/ 而不是环境变量里：表格地址**不是密钥**，是团队共享的配置，
+ * 和 chains / contracts / operators 同一性质 —— 换表格该走改配置提 PR 那条路，
+ * 而不是每个人各自在自己的 .env 里填一份（填错了别人还看不见）。
+ * 访问控制在本机 lark CLI 的登录态上，不在这个 URL 上。
+ *
+ * **不参与 configVersion** —— 换个表格地址不该让前端弹「配置已更新，请刷新」。
+ * 所以它没走 loadRawConfig 那条路。
+ *
+ * 文件不存在不算错：没配就跳过同步、只用本地数据。
+ */
+export interface SyncConfig {
+  /** 飞书多维表格链接，直接贴浏览器地址栏里的完整 URL。空字符串 = 不同步 */
+  readonly larkUrl: string
+}
+
+const EMPTY_SYNC: SyncConfig = { larkUrl: '' }
+
+export async function readSyncConfig(dataDir: string = env.DATA_DIR): Promise<SyncConfig> {
+  const raw = await readJson<Partial<SyncConfig>>(join(resolve(dataDir), 'sync.json'), EMPTY_SYNC)
+  // 手写的配置文件，类型不能假定 —— 不是字符串就当没配，别把 undefined 传进 URL 解析
+  return { larkUrl: typeof raw.larkUrl === 'string' ? raw.larkUrl.trim() : '' }
+}
+
 
 /**
  * contracts.json 的内容形状。业务线与合约同在一个文件里，读写必须成对 ——
