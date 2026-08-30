@@ -12,3 +12,29 @@ export const PAUSABLE_ABI = [
   'function pause()',
   'function unpause()',
 ]
+
+/**
+ * 这份 ABI 能编码哪些方法 —— **从 ABI 自己推导**，不另写一份清单，
+ * 否则又是一处会漂移的重复。
+ *
+ * 为什么需要它：操作按钮是**后端下发**的（/registry 的 operations），
+ * 而这份 ABI 是前端写死的。后端加一种操作，按钮会自动出现，
+ * 但钱包模式走到编码这一步才会发现前端根本不认识它。
+ *
+ * GPG 模式不受影响 —— 那边由后端编码，前端只传操作名。
+ */
+const ENCODABLE: ReadonlySet<string> = new Set(
+  PAUSABLE_ABI.map((signature) => /function\s+(\w+)/.exec(signature)?.[1]).filter(
+    (name): name is string => name !== undefined,
+  ),
+)
+
+export const canEncode = (method: string): boolean => ENCODABLE.has(method)
+
+/**
+ * 一个 32 字节的字里是不是干净的 0 或 1。
+ *
+ * 两个链族都要这道守卫：合约地址误配成预编译地址时，它对任意调用都返回哈希，
+ * 长度对但值不是 0/1，解出来就成了"已暂停"，紧急暂停会被静默跳过。
+ */
+export const isBoolWord = (data: string): boolean => /^0{63}[01]$/.test(data.replace(/^0x/, ''))

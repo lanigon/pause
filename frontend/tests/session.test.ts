@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
-import type { WalletAdapter } from '../src/chain/wallet'
+import type { WalletAdapter } from '../src/chain'
 import type { Registry } from '../src/types'
 
 /**
@@ -37,7 +37,7 @@ vi.mock('../src/store/api', () => ({
   cancelBatch: vi.fn(),
   postLog: vi.fn(),
 }))
-vi.mock('../src/chain/multicall', () => ({ readStates: vi.fn(async () => new Map()) }))
+
 
 /**
  * 模拟一个真钱包：解绑之后就不再回调。

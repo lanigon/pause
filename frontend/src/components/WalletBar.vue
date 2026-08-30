@@ -3,7 +3,7 @@ import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { ArrowDown } from '@element-plus/icons-vue'
 import { useStore } from '../store'
-import { byFamily, discoverWallets, FAMILIES, shorten, type WalletAdapter } from '../chain/wallet'
+import { byFamily, discoverWallets, FAMILIES, shorten, type WalletAdapter } from '../chain'
 import type { ChainFamily } from '../types'
 
 /**

@@ -1,6 +1,6 @@
 import { computed, ref, shallowRef } from 'vue'
 import * as api from './api'
-import { readStates } from '../chain/multicall'
+import { readStates } from '../chain'
 import { dayRange, monthOf, monthRange, today } from '../day'
 import type { Session } from './session'
 import type {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import { useStore } from '../store'
-import { shorten } from '../chain/wallet'
+import { shorten, explorerTxUrl } from '../chain'
 import type { OperationLog, TxLogStatus } from '../types'
 import { isFuture, monthOf, shiftDay, toDay, today } from '../day'
 
@@ -86,17 +86,9 @@ const time = (ts: string): string =>
   new Date(ts).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit' })
 
-/**
- * 交易的浏览器链接。
- * Tron 的路径和 EVM 不一样（/transaction/ 而不是 /tx/），
- * 拼错了点开是 404 —— 和后端 tron/adapter.ts 保持同一份对照。
- */
-const explorerUrl = (chain: string, hash: string): string => {
-  const c = store.chainOf(chain)
-  if (!c) return '#'
-  const path = c.type === 'tron' ? 'transaction' : 'tx'
-  return `${c.explorer.replace(/\/$/, '')}/${path}/${hash}`
-}
+/** 浏览器链接由链族自己拼 —— 各链路径不一样，组件不该知道这件事 */
+const explorerUrl = (chain: string, hash: string): string =>
+  explorerTxUrl(store.chainOf(chain), hash)
 </script>
 
 <template>

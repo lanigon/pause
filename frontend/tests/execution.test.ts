@@ -26,7 +26,7 @@ vi.mock('../src/store/api', () => ({
   cancelBatch: () => cancelBatch(),
   postLog: (...args: unknown[]) => postLog(...args),
 }))
-vi.mock('../src/chain/multicall', () => ({ readStates: vi.fn(async () => new Map()) }))
+
 const MOCK_WALLET = {
   id: 'mock',
   family: 'evm',
@@ -39,8 +39,9 @@ const MOCK_WALLET = {
 }
 
 // 只替掉真会碰浏览器的 discoverWallets；byFamily/signsIn 是纯函数，用真的
-vi.mock('../src/chain/wallet', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../src/chain/wallet')>()),
+vi.mock('../src/chain', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/chain')>()),
+  readStates: vi.fn(async () => new Map()),
   discoverWallets: async () => [MOCK_WALLET],
 }))
 

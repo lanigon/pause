@@ -1,6 +1,6 @@
 import { ref } from 'vue'
 import * as api from './api'
-import { byFamily, signsIn, type WalletAdapter } from '../chain/wallet'
+import { byFamily, signsIn, type WalletAdapter } from '../chain'
 import type { ChainFamily, Operator, SignMode } from '../types'
 
 /**

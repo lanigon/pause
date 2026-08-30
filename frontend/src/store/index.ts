@@ -3,7 +3,7 @@ import { ref } from 'vue'
 import { useCatalog } from './catalog'
 import { useExecution } from './execution'
 import { useSession } from './session'
-import type { WalletAdapter } from '../chain/wallet'
+import type { WalletAdapter } from '../chain'
 
 /**
  * 唯一的 store，由三块组合而成：

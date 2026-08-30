@@ -26,13 +26,6 @@ export interface Contract {
   address: string
 }
 
-export interface Signer {
-  chainType: ChainFamily
-  address: string
-  allowedChains: string[]
-  allowedBusinessLines: string[]
-}
-
 /**
  * 操作名由后端 /registry 下发（services/operations.ts 里的那个闭集），前端不再自备清单 ——
  * 写死成两个字面量的话，后端每加一种操作，前端都得跟着改一次才用得上。
@@ -50,7 +43,6 @@ export interface Registry {
   businessLines: BusinessLine[]
   chains: Chain[]
   contracts: Contract[]
-  signers: Signer[]
   operations: Operation[]
 }
 

@@ -27,7 +27,10 @@ vi.mock('../src/store/api', () => ({
   cancelBatch: vi.fn(),
   postLog: vi.fn(),
 }))
-vi.mock('../src/chain/multicall', () => ({ readStates: (...args: unknown[]) => readStates(...args) }))
+vi.mock('../src/chain', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/chain')>()),
+  readStates: (...args: unknown[]) => readStates(...args),
+}))
 const REGISTRY: Registry = {
   configVersion: 'v1',
   businessLines: [

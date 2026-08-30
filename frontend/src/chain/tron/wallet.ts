@@ -1,63 +1,14 @@
-import { BrowserProvider, Interface, type Eip1193Provider } from 'ethers'
-import { PAUSABLE_ABI } from './abi'
-import type { Chain, ChainFamily } from '../types'
+import type { WalletAdapter } from '../types'
+
+/** TIP-6963 广播是异步的，给钱包一点时间应答 */
+const ANNOUNCE_WINDOW_MS = 300
 
 /**
- * 钱包适配。与后端一样的思路：一个接口，多套实现，按链族分派。
+ * Tron 钱包（TronLink 及兼容钱包）。
  *
- * **一个链族可以有多个钱包** —— 用户同时装了 MetaMask、OKX、Rabby 是常态，
- * 它们会抢 window.ethereum，谁最后注入谁赢。所以 EVM 侧用 EIP-6963 发现，
- * 每个钱包各自announce 自己和自己的 provider，用户点哪个就用哪个的 provider。
- *
- * 加新链族：实现一份 discover，在 DISCOVERY 里加一行。
+ * 两代并存：新版 window.tron 走 TIP-6963 广播发现 + eth_requestAccounts；
+ * 老版只有 window.tronLink / window.tronWeb，靠全局 message 事件通知换号。
  */
-export interface WalletAdapter {
-  /** 同链族下的唯一标识（EIP-6963 的 rdns，或链族名） */
-  readonly id: string
-  readonly family: ChainFamily
-  readonly label: string
-  /** 钱包图标，EIP-6963 给的 data URI */
-  readonly icon?: string
-  isInstalled(): boolean
-  connect(): Promise<string>
-  signMessage(message: string): Promise<string>
-  /**
-   * 发一笔无参的操作交易（pause / unpause）。
-   *
-   * 传的是**操作名**，不是编码好的 calldata —— 各链族的编码方式根本不同：
-   * EVM 要 ABI 编码成 4 字节选择器，Tron 要的是 `pause()` 这样的方法签名字符串。
-   * 让调用方去编码的话，它就得知道每条链族的编码规则，那正是 adapter 该藏起来的东西。
-   */
-  sendTransaction(chain: Chain, to: string, operation: string): Promise<string>
-  /** 当前所在链（EVM 为 chainId，Tron 返回 null 表示不适用） */
-  currentChainId(): Promise<number | null>
-  switchChain(chain: Chain): Promise<void>
-  /**
-   * 订阅账户变更，返回解绑函数。
-   *
-   * **必须能解绑**：断开登录后监听器还活着的话，用户在钱包里换个账号，
-   * 回调仍会把 connected 写成新地址 —— 顶栏显示绿色「已连接」，
-   * 实际上没有 operator，什么也做不了。重连时也会一层层叠加监听。
-   */
-  onAccountChange(handler: (address: string | null) => void): () => void
-}
-
-/** 和 multicall 共用同一份 ABI，免得两处各写一份、改一处漏一处 */
-const iface = new Interface(PAUSABLE_ABI)
-
-const encodeOperation = (operation: string): string => iface.encodeFunctionData(operation)
-
-type InjectedProvider = Eip1193Provider & {
-  on?: (event: string, handler: (...args: unknown[]) => void) => void
-  /** EIP-1193 要求提供，但老钱包不一定有 —— 没有就退化成解绑无效，不能直接崩 */
-  removeListener?: (event: string, handler: (...args: unknown[]) => void) => void
-}
-
-/** EIP-6963：钱包各自广播自己，不再抢 window.ethereum */
-interface Eip6963Detail {
-  info: { uuid: string; name: string; icon: string; rdns: string }
-  provider: InjectedProvider
-}
 
 /** TIP-6963：Tron 侧的同一套机制，只是 provider 换成了 TronProvider */
 interface Tip6963Detail {
@@ -119,100 +70,6 @@ interface TronProvider {
 interface TronAuthResult {
   code?: number
   message?: string
-}
-
-declare global {
-  interface Window {
-    ethereum?: InjectedProvider
-    /** 新版 TronLink */
-    tron?: TronProvider
-    /** 老版 TronLink */
-    tronLink?: { request: (args: { method: string }) => Promise<unknown> }
-    tronWeb?: TronWebApi
-  }
-}
-
-/* ── EVM（MetaMask / OKX / Rabby 等 EIP-1193 钱包）── */
-
-/**
- * 每个 EVM 钱包绑定**自己的** provider，不共用 window.ethereum ——
- * 装了多个钱包时那个全局变量归谁全看注入顺序，点了 OKX 却用上 MetaMask
- * 是最常见的困惑来源。
- */
-function createEvmWallet(
-  provider: InjectedProvider,
-  label: string,
-  id: string,
-  icon?: string,
-): WalletAdapter {
-  const wallet: WalletAdapter = {
-    id,
-    family: 'evm',
-    label,
-    icon,
-
-    isInstalled: () => true, // 能被发现就说明装了
-
-    async connect() {
-      const accounts = (await provider.request({ method: 'eth_requestAccounts' })) as string[]
-      const address = accounts[0]
-      if (!address) throw new Error('未获得授权账户')
-      return address
-    },
-
-    async signMessage(message) {
-      return (await new BrowserProvider(provider).getSigner()).signMessage(message)
-    },
-
-    async sendTransaction(chain, to, operation) {
-      await wallet.switchChain(chain)
-      const signer = await new BrowserProvider(provider).getSigner()
-      // ABI 编码在这里做 —— 平台的操作都是无参的，编出来就是 4 字节选择器
-      const tx = await signer.sendTransaction({ to, data: encodeOperation(operation) })
-      return tx.hash
-    },
-
-    async currentChainId() {
-      const hex = (await provider.request({ method: 'eth_chainId' })) as string
-      return Number.parseInt(hex, 16)
-    },
-
-    /** 链不存在时（4902）自动添加 */
-    async switchChain(chain) {
-      const chainIdHex = `0x${chain.chainId.toString(16)}`
-      try {
-        await provider.request({
-          method: 'wallet_switchEthereumChain',
-          params: [{ chainId: chainIdHex }],
-        })
-      } catch (error) {
-        if ((error as { code?: number }).code !== 4902) throw error
-        await provider.request({
-          method: 'wallet_addEthereumChain',
-          params: [
-            {
-              chainId: chainIdHex,
-              chainName: chain.key,
-              rpcUrls: chain.rpcs,
-              blockExplorerUrls: [chain.explorer],
-              nativeCurrency: { name: chain.symbol, symbol: chain.symbol, decimals: chain.decimals },
-            },
-          ],
-        })
-      }
-    },
-
-    onAccountChange(handler) {
-      // 监听器提出来命名，解绑时要拿同一个引用才摘得掉
-      const listener = (...args: unknown[]): void => {
-        const accounts = args[0] as string[] | undefined
-        handler(accounts?.[0] ?? null)
-      }
-      provider.on?.('accountsChanged', listener)
-      return () => provider.removeListener?.('accountsChanged', listener)
-    },
-  }
-  return wallet
 }
 
 /* ── Tron（TronLink）── */
@@ -347,6 +204,14 @@ function createTronWallet(
     signMessage: (message) => requireTronWeb(provider).trx.signMessageV2(message),
 
     /** 老版没有 eth_chainId，读不到就返回 null，由 switchChain 走 host 兜底 */
+
+    /**
+     * 确保钱包停在目标网络上。
+     *
+     * TronLink 可以切到 Nile / Shasta 测试网，而界面显示的是主网合约地址 ——
+     * 发过去要么失败，要么打到测试网上一个**完全无关的合约**。
+     * 紧急暂停时这等于没暂停，却会显示成功，所以这一步不能省。
+     */
     async currentChainId() {
       if (!provider) return null
       try {
@@ -358,13 +223,6 @@ function createTronWallet(
       }
     },
 
-    /**
-     * 确保钱包停在目标网络上。
-     *
-     * TronLink 可以切到 Nile / Shasta 测试网，而界面显示的是主网合约地址 ——
-     * 发过去要么失败，要么打到测试网上一个**完全无关的合约**。
-     * 紧急暂停时这等于没暂停，却会显示成功，所以这一步不能省。
-     */
     async switchChain(chain) {
       const current = await wallet.currentChainId()
       if (current === chain.chainId) return
@@ -447,42 +305,6 @@ function createTronWallet(
   return wallet
 }
 
-/* ── 钱包发现 ── */
-
-/** EIP-6963 广播是异步的，给钱包一点时间应答 */
-const ANNOUNCE_WINDOW_MS = 300
-
-/**
- * 列出某个链族下装了哪些钱包。
- *
- * EVM 走 EIP-6963：我们喊一声 requestProvider，装了的钱包各自应答，
- * 带上自己的名字、图标和**独立的 provider**。这样多个钱包能并存，
- * 用户点哪个就用哪个 —— 不像 window.ethereum 那样只有一个赢家。
- *
- * 没有任何钱包应答时退回 window.ethereum（老钱包不支持 6963）。
- */
-async function discoverEvm(): Promise<readonly WalletAdapter[]> {
-  const found = new Map<string, Eip6963Detail>()
-  const onAnnounce = (event: Event): void => {
-    const detail = (event as CustomEvent<Eip6963Detail>).detail
-    if (detail?.info?.rdns) found.set(detail.info.rdns, detail)
-  }
-
-  window.addEventListener('eip6963:announceProvider', onAnnounce)
-  window.dispatchEvent(new Event('eip6963:requestProvider'))
-  await new Promise((resolve) => setTimeout(resolve, ANNOUNCE_WINDOW_MS))
-  window.removeEventListener('eip6963:announceProvider', onAnnounce)
-
-  if (found.size > 0) {
-    return [...found.values()].map((detail) =>
-      createEvmWallet(detail.provider, detail.info.name, detail.info.rdns, detail.info.icon),
-    )
-  }
-
-  // 老钱包不广播 6963，只注入 window.ethereum
-  return window.ethereum ? [createEvmWallet(window.ethereum, '浏览器钱包', 'injected')] : []
-}
-
 /**
  * Tron 侧的钱包发现。
  *
@@ -497,7 +319,7 @@ async function discoverEvm(): Promise<readonly WalletAdapter[]> {
  *
  * 没有应答就依次退到 window.tron（新版但不支持广播）与 window.tronLink（老版）。
  */
-async function discoverTron(): Promise<readonly WalletAdapter[]> {
+export async function discoverTron(): Promise<readonly WalletAdapter[]> {
   const found = new Map<string, Tip6963Detail>()
   const onAnnounce = (event: Event): void => {
     const detail = (event as CustomEvent<Tip6963Detail>).detail
@@ -526,44 +348,3 @@ async function discoverTron(): Promise<readonly WalletAdapter[]> {
   return []
 }
 
-/**
- * 链族 → 怎么发现它的钱包。**加一条异构链就在这里加一行**。
- * 没注册的链族返回空列表，界面显示"没有检测到钱包"，不会拿 EVM 的逻辑去套。
- */
-const DISCOVERY: Record<string, () => Promise<readonly WalletAdapter[]>> = {
-  evm: discoverEvm,
-  tron: discoverTron,
-}
-
-/**
- * 列出某个链族下装了哪些钱包。
- *
- * EVM 走 EIP-6963：我们喊一声 requestProvider，装了的钱包各自应答，
- * 带上自己的名字、图标和**独立的 provider**。这样多个钱包能并存，
- * 用户点哪个就用哪个 —— 不像 window.ethereum 那样只有一个赢家。
- */
-export async function discoverWallets(family: ChainFamily): Promise<readonly WalletAdapter[]> {
-  if (typeof window === 'undefined') return []
-  return (await DISCOVERY[family]?.()) ?? []
-}
-
-/**
- * 平台支持的链族。**这是唯一一处链族清单** ——
- * store 的初始状态、顶栏的按钮都从它生成，加一族只改这里和上面的 DISCOVERY。
- */
-export const FAMILIES: readonly { family: ChainFamily; label: string; signsIn: boolean }[] = [
-  // 只有 EVM 参与登录 —— 身份就是一个 EVM 地址
-  { family: 'evm', label: 'EVM', signsIn: true },
-  { family: 'tron', label: 'Tron', signsIn: false },
-]
-
-/** 按链族建一张表，每族一个初值。避免各处手写 { evm: …, tron: … } */
-export const byFamily = <T,>(initial: () => T): Record<ChainFamily, T> =>
-  Object.fromEntries(FAMILIES.map((f) => [f.family, initial()])) as Record<ChainFamily, T>
-
-/** 这个链族参不参与签名登录 */
-export const signsIn = (family: ChainFamily): boolean =>
-  FAMILIES.find((f) => f.family === family)?.signsIn === true
-
-export const shorten = (address: string, head = 6, tail = 4): string =>
-  address.length <= head + tail ? address : `${address.slice(0, head)}…${address.slice(-tail)}`

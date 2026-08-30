@@ -3,7 +3,7 @@ import { computed } from 'vue'
 import { ElMessage, ElMessageBox, type CheckboxValueType } from 'element-plus'
 import { ArrowDown } from '@element-plus/icons-vue'
 import { useStore } from '../store'
-import { shorten } from '../chain/wallet'
+import { shorten, explorerAddressUrl } from '../chain'
 import { pendingLabel } from '../labels'
 import type { Contract, Operation } from '../types'
 
@@ -30,9 +30,8 @@ const statusOf = (contract: Contract) => {
 
 const explorerUrl = (contract: Contract): string => {
   const state = store.states.get(contract.id)
-  if (state?.explorerUrl) return state.explorerUrl
-  const chain = store.chainOf(contract.chain)
-  return chain ? `${chain.explorer.replace(/\/$/, '')}/address/${contract.address}` : '#'
+  // 执行过就用后端给的交易链接，否则指向合约地址
+  return state?.explorerUrl ?? explorerAddressUrl(store.chainOf(contract.chain), contract.address)
 }
 
 /**

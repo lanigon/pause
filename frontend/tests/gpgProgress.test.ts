@@ -26,9 +26,10 @@ vi.mock('../src/store/api', () => ({
   cancelBatch: vi.fn(),
   postLog: vi.fn(),
 }))
-vi.mock('../src/chain/multicall', () => ({ readStates: vi.fn() }))
-vi.mock('../src/chain/wallet', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../src/chain/wallet')>()), walletFor: vi.fn() }))
+vi.mock('../src/chain', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/chain')>()),
+  readStates: vi.fn(async () => new Map()),
+}))
 
 const REGISTRY = {
   configVersion: 'v1',
