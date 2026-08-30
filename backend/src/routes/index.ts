@@ -42,7 +42,3 @@ router.get('/logs', validateQuery(log.logQuerySchema), asyncHandler(log.getLogs)
 router.get('/logs/daily', validateQuery(log.logDailySchema), asyncHandler(log.getDailyCounts))
 router.post('/logs', validateBody(log.logInputSchema), asyncHandler(log.postLog))
 
-// 系统状态
-router.get('/state', asyncHandler(registry.getState))
-router.get('/state/rpc', asyncHandler(registry.getRpcHealth))
-

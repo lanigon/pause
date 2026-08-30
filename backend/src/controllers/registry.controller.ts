@@ -82,13 +82,3 @@ export async function postReload(req: Request, res: Response): Promise<void> {
 export function getHealth(_req: Request, res: Response): void {
   ok(res, registryService.health())
 }
-
-/** 后端状态快照：前端顶栏用它显示健康指示 */
-export async function getState(_req: Request, res: Response): Promise<void> {
-  ok(res, await registryService.state())
-}
-
-/** 各链 RPC 健康：延迟与区块高度 */
-export async function getRpcHealth(_req: Request, res: Response): Promise<void> {
-  ok(res, await registryService.rpcHealth())
-}

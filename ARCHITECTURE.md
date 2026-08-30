@@ -9,7 +9,46 @@
 
 ---
 
-## 1. 架构分层
+## 1. 项目目录
+
+```
+operator/
+├── OPERATIONS.md        操作手册
+├── ARCHITECTURE.md      本文
+├── backend/
+│   ├── data/            全部配置 JSON：chains · contracts · operators · rpc · sync
+│   ├── secrets/         <链族>.key.gpg + <链族>.address，不入库
+│   ├── scripts/         keys 密钥管理 · sync 拉数据 · check 启动前排查
+│   └── src/
+│       ├── routes/          1   path → controller
+│       ├── controllers/     4   HTTP 出入口
+│       ├── services/        4   编排，与 controller 一一对应
+│       ├── core/            6   领域能力，不知道 HTTP
+│       ├── repositories/    3   唯一碰磁盘的层
+│       ├── models/          5   表结构：zod schema + 推导类型
+│       ├── middlewares/     4   logging · auth · validate · error
+│       ├── config/          2   env 常量 + 配置文件信封
+│       └── lib/                 通用能力，对上层零依赖
+│           ├── web3/        5   ChainAdapter · runner · chains · types
+│           │   ├── evm/     5   client · tx · nonce · adapter · abi
+│           │   └── tron/    3   client · tx · adapter
+│           ├── keys/        3   gpg · signer · worker
+│           ├── rpc/         2   endpoint · rpcProvider
+│           ├── lark/        1   飞书表格读取
+│           └── utils/       8   errors · logger · sse · mutex · net 等
+└── frontend/src/
+    ├── store/           唯一 Pinia store：index · api · session · catalog · execution
+    ├── chain/           types · index 注册表 · abi，evm/ 与 tron/ 各 read + wallet
+    ├── components/      5   WalletBar · AppSidebar · ContractList · GpgProgress · OperationLog
+    ├── day.ts           本地日历日换算
+    └── labels.ts        执行阶段中文名
+```
+
+`docs/` 下另有四份细节文档（架构手册 / 接口逐条 / 前端结构 / 接新链），不入库。
+
+---
+
+## 2. 架构分层
 
 ```
 routes/          path → controller
@@ -48,44 +87,70 @@ lib/  → core/ / services/ / controllers/     0 处
 
 ---
 
-## 2. 功能模块
+## 3. 功能模块
 
-| 模块 | 位置 | 职责 |
-|---|---|---|
-| 配置注册表 | `core/config` | 加载 + 跨文件引用校验 + 建索引 + 预算 DTO |
-| 执行编排 | `core/execution` | 授权 → 前置检查 → 按链并行 → 事件汇总 |
-| 数据同步 | `core/sync` | 飞书表格拉取 → 比对 → 有差异才写盘 |
-| 状态读取 | `core/contractState` | 按链批量读 `paused()` |
-| 身份令牌 | `core/identity` | JWT 签发与校验 |
-| 操作定义 | `core/operations` | 操作闭集 + 前置条件 + 预期结果 |
-| 链适配 | `lib/web3` | EVM / Tron 两套 adapter + 公共批量循环 |
-| 密钥 | `lib/keys` | GPG 解密 + 签名子进程 |
-| RPC | `lib/rpc` | 三级降级：Lark → Alchemy → ChainList |
+系统交付 8 项能力。分工原则：链上读由前端做、后端兜底；链上写看私钥在谁手里；
+配置与审计后端是唯一真相源，前端只渲染。
+
+| 功能 | 前端负责 | 后端负责 | 实现位置 |
+|---|---|---|---|
+| 身份与权限 | 连钱包、拼挑战消息、签名、token 存内存 | 验签、查白名单、发 JWT、角色拦截 | `core/identity` · `services/auth` · `middlewares/auth` |
+| 配置管理 | 渲染业务线与合约、勾选、折叠 | 加载、跨文件校验、建索引、预算 DTO | `core/config` · `services/registry` |
+| 数据同步 | 展示同步进度 | 拉飞书表格、与本地比对、有差异才写盘 | `core/sync` · `lib/lark` |
+| 状态监控 | Multicall3 自读，主路径 | 兜底代读，按链批量 | `chain/*/read` · `core/contractState` |
+| 批量执行·钱包 | 切链、逐笔签名、广播 | 只收一条日志 | `chain/*/wallet` |
+| 批量执行·GPG | 发一个请求、渲染进度流 | 解密、预演、签名、广播、确认 | `core/execution` · `services/gpg` · `lib/keys` |
+| 操作审计 | 按日期查看、按 hash 去重展示 | 唯一写入方，地址从 JWT 填 | `services/log` · `repositories/log` |
+| 系统可观测 | 无 | 每请求回写 `x-request-id`，日志可串回链路 | `middlewares/logging` |
+
+批量执行分成两个模块，因为它们的形状完全不同，不是同一功能的两种配置。
+钱包模式私钥在运维自己手里，后端全程不碰；GPG 模式私钥在服务器上，前端不传任何密钥材料。
 
 ---
 
-## 3. 数据流
+## 4. 数据流
 
+配置从两个来源进 `data/`，经跨文件校验后预算成一份 DTO 常驻内存。
+校验不过服务起不来，不会等到点下去才发现。
+
+```mermaid
+flowchart TB
+    LARK["飞书表格"] -->|core/sync 拉取 → 比对| DATA[("data/*.json")]
+    EDIT["本地编辑"] --> DATA
+    DATA -->|core/config 跨文件引用校验| DTO["DTO 内存预算"]
+    DTO -->|"GET /registry"| UI["前端渲染"]
+    DATA -.校验不过.-> STOP["服务起不来"]
 ```
-配置来源                     运行时
-────────                    ────────
-飞书表格 ─┐                  前端 ─── Multicall3 ──→ 链上（读状态，主路径）
-          ├→ data/*.json      │
-本地编辑 ─┘      │             └─── GET /states ──→ 后端 ─→ 链上（兜底）
-                 ↓
-          core/config 校验 ──→ DTO（内存预算）──→ GET /registry ──→ 前端渲染
-                                                        ↓
-                                              交易日志 data/operations.json
+
+运行时分三条：读状态、发交易、记日志。读走前端优先，写走两条互斥的路。
+
+```mermaid
+flowchart LR
+    UI["前端"]
+    BE["后端"]
+    CHAIN[("链上")]
+    LOG[("operations.json")]
+
+    UI -->|"Multicall3 主路径"| CHAIN
+    UI -->|"GET /states 兜底"| BE
+    BE -->|"按链批量 eth_call"| CHAIN
+
+    UI -->|"钱包模式：自己签自己发"| CHAIN
+    UI -->|"GPG 模式：POST /gpg/batch"| BE
+    BE -->|"gpg-agent 解密 → 签名 → 广播"| CHAIN
+    BE -->|"SSE 进度事件"| UI
+
+    UI -->|"钱包模式 POST /logs"| BE
+    BE -->|"GPG 模式后端自己写"| LOG
+    BE --> LOG
 ```
 
-配置改动必须经 `core/config` 的跨文件校验，引用不存在的链或业务线时服务起不来。
-
-链上状态默认由前端读，理由是不占后端 RPC 配额、切业务线时刷新更快。
+链上状态默认由前端读，不占后端 RPC 配额，切业务线时刷新更快。
 公开 RPC 常无 CORS 头会被浏览器拦截，此时退回 `GET /states`。
 
 ---
 
-## 4. 时序图
+## 5. 时序图
 
 ### 登录
 
@@ -159,42 +224,43 @@ sequenceDiagram
 
 ---
 
-## 5. 接口
+## 6. 接口
 
-13 个。响应统一 `{ success, data, error }`。除前两个外全部需要 JWT。
+11 个。响应统一 `{ success, data, error }`。除公开的两个外全部需要 JWT。
 
-| 方法 | 路径 | 说明 |
+| 分组 | 接口 | 说明 |
 |---|---|---|
-| GET | `/health` | 存活探针，无需认证 |
-| POST | `/auth/login` | 钱包签名登录，唯一发 token 的接口 |
-| GET | `/registry` | 配置全量，带 ETag，纯内存 |
-| GET | `/registry/sync` | SSE。先与飞书表格比对再给数据 |
-| GET | `/states` | 链上状态兜底 |
-| POST | `/registry/reload` | 热重载，仅 admin |
-| POST | `/gpg/batch` | SSE。响应体即执行进度流 |
-| POST | `/gpg/cancel` | 按操作者地址取消 |
-| GET | `/logs` | 交易日志，倒序分页 + 时间窗 |
-| GET | `/logs/daily` | 每日笔数，日期选择器角标 |
-| POST | `/logs` | 钱包模式广播后上报 |
-| GET | `/state` | 系统快照，纯内存 |
-| GET | `/state/rpc` | 各链 RPC 探测，慢一个量级 |
+| 公开 | `GET /health` | 存活探针。`npm run check` 与部署探针在用 |
+| 公开 | `POST /auth/login` | 钱包签名登录，唯一发 token 的接口 |
+| 配置 | `GET /registry/sync` | SSE。先与飞书表格比对再给数据，正常加载路径 |
+| 配置 | `GET /registry` | 配置全量，纯内存带 ETag。sync 断流时的降级路径 |
+| 配置 | `POST /registry/reload` | 热重载，仅 admin。手改 `data/` 后不必重启 |
+| 链上 | `GET /states` | 状态兜底。前端 multicall 被 CORS 拦时走这条 |
+| 执行 | `POST /gpg/batch` | SSE。响应体即执行进度流 |
+| 执行 | `POST /gpg/cancel` | 按操作者地址取消，不是按连接 |
+| 审计 | `GET /logs` | 交易日志，倒序分页 + 时间窗 |
+| 审计 | `GET /logs/daily` | 每日笔数，日期选择器角标 |
+| 审计 | `POST /logs` | 钱包模式广播后上报 |
 
-`/state` 与 `/state/rpc` 拆开的理由是快慢差一个量级，合并会让顶栏健康指示被节点探测拖住。
+配置分三个接口而非一个，因为语义不同：`sync` 是 SSE 且要等外部服务，
+`registry` 是可缓存的纯内存 GET，`reload` 是改服务端状态的 POST。
+`states` 读的是链上而非配置，合并会让配置接口变慢且不可缓存。
 
 ---
 
-## 6. 身份验证
+## 7. 身份验证
 
-| 环节 | 机制 |
-|---|---|
-| 挑战消息 | 前端自拼（含时间戳 + 随机数），后端逐字重建后验签 |
-| 服务端 nonce | 不需要。省一次往返，服务端不存状态 |
-| 防重放 | 时间窗 ±2 分钟 + 已用签名内存去重 5 分钟 |
-| 白名单 | `data/operators.json`，地址不在其中返回 403 |
-| 令牌 | JWT HS256 自实现，8 小时，不引第三方库以减攻击面 |
-| 签名密钥 | 生产每次启动随机生成；开发缓存 `secrets/.jwt-dev` |
-| 前端存储 | 只存内存。刷新页面重新登录 |
-| 传输 | `Authorization` 头；SSE 因 EventSource 限制走 query，且仅对 GET 生效 |
+| 阶段 | 环节 | 机制 |
+|---|---|---|
+| 挑战 | 消息构造 | 前端自拼，含时间戳与随机数；后端逐字重建后验签 |
+| 挑战 | 服务端 nonce | 不需要。省一次往返，服务端不存状态 |
+| 挑战 | 防重放 | 时间窗 ±2 分钟 + 已用签名内存去重 5 分钟 |
+| 授权 | 白名单 | `data/operators.json`，地址不在其中返回 403 |
+| 令牌 | 算法 | JWT HS256 自实现，不引第三方库以减攻击面 |
+| 令牌 | 有效期 | 8 小时 |
+| 令牌 | 签名密钥 | 生产每次启动随机生成；开发缓存 `secrets/.jwt-dev` |
+| 令牌 | 前端存储 | 只存内存。刷新页面重新登录 |
+| 令牌 | 传输 | `Authorization` 头；SSE 因 EventSource 限制走 query，仅对 GET 生效 |
 
 登录只认 EVM 签名。Tron 钱包仅用于钱包模式发交易，不参与登录，顶栏下拉标注此点。
 
@@ -210,7 +276,7 @@ sequenceDiagram
 
 ---
 
-## 7. 前端数据获取与处理
+## 8. 前端数据获取与处理
 
 ```
 store/     唯一 Pinia store，三块组合
@@ -239,43 +305,43 @@ chain/     evm/ 与 tron/ 各一套 read + wallet，index.ts 按链族分派
 
 ---
 
-## 8. 安全设计
+## 9. 安全设计
 
-| 面 | 措施 |
-|---|---|
-| 口令传输 | 从不经过 HTTP。GPG 解密由服务器本机 gpg-agent + pinentry 负责 |
-| 私钥生命周期 | 仅存在于一次性子进程内存，用完 `exit`。gpg 独立进程组，超时杀整组 |
-| 密钥掉包 | 派生地址必须等于 `secrets/<链族>.address`，不等立即中止 |
-| 已签名数据 | rawTx 只在广播函数局部变量存在，不进日志、不进 API、不进前端 |
-| 令牌 | 只存前端内存；后端签名密钥每次启动随机生成，无长期密钥可泄露 |
-| RPC 凭证 | 含 apiKey 的 URL 永久 `public:false`，不下发前端，`/state/rpc` 剔除 `rawUrl` |
-| 访问日志 | 请求头一个都不落盘，`Authorization` 无机会进入日志对象 |
-| 输入校验 | zod 在系统边界校验；GPG 批量额外要求手输 CONFIRM |
-| 操作可追溯 | 日志地址一律从 JWT 填，忽略请求体身份字段 |
-| 危险操作范围 | 操作是编译期可穷举的闭集，调用方无法传入任意合约方法名 |
+| 类别 | 面 | 措施 |
+|---|---|---|
+| 密钥 | 口令传输 | 从不经过 HTTP。解密由服务器本机 gpg-agent + pinentry 负责 |
+| 密钥 | 私钥生命周期 | 仅存在于一次性子进程内存，用完 `exit`。gpg 独立进程组，超时杀整组 |
+| 密钥 | 掉包检测 | 派生地址必须等于 `secrets/<链族>.address`，不等立即中止 |
+| 密钥 | 已签名数据 | rawTx 只在广播函数局部变量存在，不进日志、不进 API、不进前端 |
+| 身份 | 令牌 | 只存前端内存；后端签名密钥每次启动随机生成，无长期密钥可泄露 |
+| 身份 | 操作可追溯 | 日志地址一律从 JWT 填，忽略请求体身份字段 |
+| 凭证 | RPC | 含 apiKey 的 URL 永久 `public:false`，不下发前端 |
+| 凭证 | 访问日志 | 请求头一个都不落盘，`Authorization` 无机会进入日志对象 |
+| 输入 | 校验 | zod 在系统边界校验；GPG 批量额外要求手输 CONFIRM |
+| 输入 | 操作范围 | 操作是编译期可穷举的闭集，调用方无法传入任意合约方法名 |
 
 链上状态的读取采取「宁可读不到，不可读错」。`paused()` 返回值必须是 32 字节的 0 或 1，
 否则视为读不到。解码器会把任何非零值当 true，而把地址配错显示成「已暂停」会让运维直接跳过该合约。
 
 ---
 
-## 9. 非功能要求
+## 10. 非功能要求
 
-| 维度 | 现状 |
-|---|---|
-| 可用性 | 优先于数据新鲜度。飞书挂了不挡控制台，解析出 0 个合约不覆盖本地 |
-| 上链保障 | 等回执 → 查状态 → 同 nonce 提价重发（最多 4 次）→ 自转账让出 nonce |
-| 容错 | 单链读失败不影响其它链；单笔失败不中断整批；签名失败中止但已广播的等到终态再汇报 |
-| 一致性 | `expectedConfigVersion` 比对，配置漂移直接拒绝执行 |
-| 性能 | DTO 加载时预算，请求路径零计算；`/registry` 带 ETag |
-| 并发 | 同一 `(链, 签名地址)` 的批次串行；跨链并行 |
-| 可观测 | 每请求 `x-request-id` 回写响应头，链路日志可串回 |
-| 可扩展 | 加 EVM 链零代码；加链族实现一个 adapter + 注册一行 |
-| 部署 | v1 单实例。任务与签名去重表在内存，不支持水平扩展 |
+| 类别 | 维度 | 现状 |
+|---|---|---|
+| 可靠 | 可用性 | 优先于数据新鲜度。飞书挂了不挡控制台，解析出 0 个合约不覆盖本地 |
+| 可靠 | 上链保障 | 等回执 → 查状态 → 同 nonce 提价重发最多 4 次 → 自转账让出 nonce |
+| 可靠 | 容错 | 单链读失败不影响其它链；单笔失败不中断整批；签名失败中止但已广播的等到终态再汇报 |
+| 可靠 | 一致性 | `expectedConfigVersion` 比对，配置漂移直接拒绝执行 |
+| 性能 | 响应 | DTO 加载时预算，请求路径零计算；`/registry` 带 ETag |
+| 性能 | 并发 | 同一「链 + 签名地址」的批次串行；跨链并行 |
+| 运维 | 可观测 | 每请求 `x-request-id` 回写响应头，链路日志可串回 |
+| 运维 | 可扩展 | 加 EVM 链零代码；加链族实现一个 adapter + 注册一行 |
+| 运维 | 部署 | v1 单实例。任务与签名去重表在内存，不支持水平扩展 |
 
 ---
 
-## 10. 已知边界
+## 11. 已知边界
 
 SSE 每 15 秒发心跳注释防代理断连，没有断线重放。连接断开即任务结束，状态由落盘日志兜底。
 `POST /gpg/cancel` 按操作者地址取消，覆盖页面刷新、换设备、代理缓冲三种连接已失效的场景。

@@ -110,20 +110,20 @@ describe('探活结果影响候选顺序', () => {
 })
 
 describe('★ 原始 URL 绝不外泄', () => {
-  it('健康接口下发的每一项都不带 rawUrl —— 它含 Alchemy apiKey', async () => {
-    const { createApp } = await import('../src/app.js')
-    const request = (await import('supertest')).default
+  it('publicUrlsFor 只给纯净 URL —— 含 apiKey 的那些永远留在后端', () => {
+    const provider = new RpcProvider()
+    provider.load(
+      {
+        syncedAt: '',
+        lark: {},
+        chainlist: { [CHAIN.key]: ['https://plain'] },
+      } as never,
+      'SECRET_KEY',
+    )
 
-    const res = await request(createApp()).get('/api/state/rpc')
-
-    const body = JSON.stringify(res.body)
-    expect(body).not.toContain('rawUrl')
-    // 更直接：整个响应里不能出现 apiKey 形状的长串路径
-    for (const chain of res.body?.data?.chains ?? []) {
-      for (const rpc of chain.rpcs ?? []) {
-        expect(rpc).not.toHaveProperty('rawUrl')
-        expect(rpc.url).not.toMatch(/\/v2\//) // Alchemy 的 key 在这个路径段后面
-      }
+    for (const url of provider.publicUrlsFor(CHAIN)) {
+      expect(url).not.toContain('SECRET_KEY')
+      expect(url).not.toMatch(/\/v2\//) // Alchemy 的 key 在这个路径段后面
     }
   })
 })

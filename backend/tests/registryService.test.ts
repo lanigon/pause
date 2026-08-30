@@ -29,8 +29,6 @@ vi.mock('../src/core/sync.js', () => ({
   SyncPhase: { SOURCE: 'source', DIFF: 'diff', APPLY: 'apply' },
   syncFromLark: vi.fn(),
 }))
-vi.mock('../src/services/gpg.service.js', () => ({ activeCount: () => 3 }))
-vi.mock('../src/services/log.service.js', () => ({ count: async () => 42 }))
 
 const service = await import('../src/services/registry.service.js')
 
@@ -94,11 +92,4 @@ describe('系统状态', () => {
     expect(health.uptimeMs).toBeGreaterThanOrEqual(0)
   })
 
-  it('/state 汇总各来源的计数', async () => {
-    expect(await service.state()).toMatchObject({
-      configVersion: 'sha256:x',
-      activeJobs: 3,
-      logCount: 42,
-    })
-  })
 })

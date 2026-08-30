@@ -287,12 +287,3 @@ describe('交易日志', () => {
   })
 })
 
-describe('系统状态', () => {
-  it('/state 报出配置版本与规模', async () => {
-    const token = await tokenFor(ADMIN)
-    const res = await request(app).get('/api/state').set('Authorization', `Bearer ${token}`)
-    expect(res.status).toBe(200)
-    expect(res.body.data.chains).toBe(1)
-    expect(res.body.data.contracts).toBe(1)
-  })
-})

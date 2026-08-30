@@ -1,10 +1,7 @@
-import { dto, getRegistry, loadRegistry } from '../core/config.js'
+import { dto, loadRegistry } from '../core/config.js'
 import { readBusinessLineStates, readStates, type ContractState } from '../core/contractState.js'
 import { SyncPhase, syncFromLark, type SyncEvent, type SyncResult } from '../core/sync.js'
-import { activeCount } from './gpg.service.js'
-import * as logService from './log.service.js'
 import type { AuthContext } from '../core/identity.js'
-import { tx } from '../lib/web3/index.js'
 import { AppError, ErrorCode, messageOf } from '../lib/utils/errors.js'
 
 /**
@@ -80,45 +77,3 @@ export const health = (): { ok: true; uptimeMs: number } => ({
   ok: true,
   uptimeMs: Date.now() - startedAt,
 })
-
-/** GET /state —— 后端状态快照，全部读内存，前端顶栏的健康指示用 */
-export async function state(): Promise<{
-  configVersion: string
-  loadedAt: number
-  chains: number
-  contracts: number
-  activeJobs: number
-  logCount: number
-}> {
-  const registry = getRegistry()
-  return {
-    configVersion: registry.configVersion,
-    loadedAt: registry.loadedAt,
-    chains: registry.chains.size,
-    contracts: registry.contracts.size,
-    activeJobs: activeCount(),
-    logCount: await logService.count(),
-  }
-}
-
-/**
- * GET /state/rpc —— 各链 RPC 健康：延迟与区块高度。
- * 这个会真的去探测每个节点，比 /state 慢一个量级，所以是独立接口。
- */
-export async function rpcHealth(): Promise<
-  readonly { chain: string; rpcs: readonly unknown[]; error?: string }[]
-> {
-  const chains = [...getRegistry().chains.values()]
-  return Promise.all(
-    chains.map(async (chain) => {
-      try {
-        const results = await tx(chain.type).checkHealth(chain)
-        // rawUrl 只在进程内用来对回节点，含 apiKey，**绝不下发**
-        return { chain: chain.key, rpcs: results.map(({ rawUrl: _rawUrl, ...safe }) => safe) }
-      } catch (error) {
-        // 一条链没有可用 RPC 不该让整个接口挂掉，但要明确说出来
-        return { chain: chain.key, rpcs: [], error: messageOf(error) }
-      }
-    }),
-  )
-}
