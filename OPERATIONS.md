@@ -2,7 +2,7 @@
 
 多链合约运维控制台。勾选合约,批量暂停 / 恢复。EVM 多链 + Tron。
 
-> 深入了解设计见 [ARCHITECTURE.md](ARCHITECTURE.md);接口细节见 [docs/API.md](docs/API.md)。
+> 深入了解设计见 [ARCHITECTURE.md](ARCHITECTURE.md)。接口逐条与更细的参考在本地 `docs/`（不入库）。
 
 ---
 
@@ -95,7 +95,8 @@ secrets/evm.address    明文地址 —— 用来核对密钥有没有被换过,
 改完 `POST /api/registry/reload`(需 admin)或重启。
 **引用了不存在的链或业务线会在启动时直接报错**,服务起不来 —— 不会等到点下去才发现。
 
-加**新链族**(Solana 等)要写代码,见 [docs/ADD-CHAIN.md](docs/ADD-CHAIN.md)。
+加**新链族**(Solana 等)要写代码 —— 实现一个 `ChainAdapter` + 在 `lib/web3/chains.ts` 注册一行,
+本地 `docs/ADD-CHAIN.md` 有分步说明。
 
 ---
 
