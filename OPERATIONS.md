@@ -6,29 +6,76 @@
 
 ---
 
-## 1. 起服务
+## 1. 前置准备
 
-```bash
-# 后端
-cd backend && npm install
-cp .env.example .env      # 三个变量都可以不填,见下方「配置」
-npm run sync              # 拉 RPC(公开数据,无需凭证)
-npm run check             # 起服务前排查,全部跑完再汇总
-npm run dev               # → http://localhost:8787
+按你要用的功能装，不是全都必需。
 
-# 前端(另开终端)
-cd frontend && npm install && npm run dev   # → http://localhost:5173
-```
+| 用途 | 需要什么 | 装法与验证 |
+|---|---|---|
+| 必需 | Node ≥ 20 | `node -v`。低于 20 起不来 |
+| 必需 | npm ≥ 9 或 pnpm ≥ 8 | `npm -v` |
+| 必需 | 浏览器 EVM 钱包 | MetaMask / OKX / Rabby 任一。**登录只认 EVM 签名** |
+| 必需 | 白名单里的地址 | 你的地址要在 `backend/data/operators.json` 里 |
+| GPG 批量 | GnuPG | `brew install gnupg`，验 `gpg --version` |
+| GPG 批量 | 运维私钥 | `npm run keys encrypt` 生成到 `secrets/` |
+| YubiKey | 插着的 OpenPGP 卡 | `gpg --card-status` 能看到卡 |
+| YubiKey | `GNUPGHOME` 设对 | 用独立密钥环时**必填**，见 §7 |
+| 飞书同步 | lark CLI 并已登录 | 不装就跳过同步，只用本地 `data/` |
+| Tron 交易 | TronLink 等 Tron 钱包 | 只有钱包模式发 Tron 交易才需要 |
 
-浏览器打开 5173,点顶栏 **EVM** 连钱包并签名登录。
-登录地址必须在 `backend/data/operators.json` 里。
-
-**`npm run check` 是排查入口** —— 一条命令看清环境、密钥、数据、Lark、服务五项。
-它不解密、不碰 YubiKey(不消耗 PIN 次数),不在第一个错误停下,每条失败都告诉你下一步做什么。
+只用「钱包签名」模式的话，前四行就够了 —— GnuPG、YubiKey、飞书都不用装。
 
 ---
 
-## 2. 日常操作
+## 2. 装依赖，然后让脚本告诉你还差什么
+
+```bash
+cd backend && npm install
+cp .env.example .env      # 三个变量都可以不填，见 §7
+npm run sync              # 拉 RPC（ChainList 公开数据，无需凭证）
+npm run check             # ← 这一步告诉你还差什么
+```
+
+`npm run check` 按五组跑一遍，**不在第一个错误停下**，全部跑完再汇总：
+
+| 组 | 查什么 |
+|---|---|
+| 运行环境 | Node 版本、前后端两边的 `node_modules` 装没装 |
+| GPG 与运维密钥 | gpg 可执行、`GNUPGHOME`、YubiKey 在不在、密钥文件与权限、声明地址、解锁方式 |
+| 数据 | `data/` 五个文件能否通过校验、每条链有几个可用 RPC |
+| 飞书 | lark CLI 装没装、`data/sync.json` 配没配、能不能拉到数据 |
+| 服务 | 后端起没起、前端起没起 |
+
+输出分两档，**每条都带下一步做什么**：
+
+```
+3 项必须处理：
+  ✗ 运维密钥：secrets/ 下没有密钥文件
+      → npm run keys encrypt
+2 项建议处理（不影响启动）：
+  ⚠ lark CLI：没装
+      → 不装就只用本地 data/
+```
+
+全部通过会打印「可以开工」。有 `✗` 时进程退出码是 1，能直接接进 CI。
+
+它**不解密、不碰 YubiKey**，所以随手跑不会消耗 PIN 尝试次数。
+要验密钥能不能真的解开，用 `npm run keys verify`。
+
+---
+
+## 3. 起服务
+
+```bash
+cd backend  && npm run dev    # → http://localhost:8787
+cd frontend && npm install && npm run dev   # 另开终端 → http://localhost:5173
+```
+
+浏览器打开 5173，点顶栏 **EVM** 连钱包并签名登录。
+
+---
+
+## 4. 日常操作
 
 ```
 连钱包登录 → 左侧勾业务线 → 右侧勾合约 → 选签名方式 → 批量暂停/恢复
@@ -53,7 +100,7 @@ cd frontend && npm install && npm run dev   # → http://localhost:5173
 
 ---
 
-## 3. 配置密钥(只有用 GPG 模式才需要)
+## 5. 配置密钥(只有用 GPG 模式才需要)
 
 ```bash
 cd backend
@@ -76,7 +123,7 @@ secrets/evm.address    明文地址 —— 用来核对密钥有没有被换过,
 
 ---
 
-## 4. 改配置
+## 6. 改配置
 
 **加一个合约** —— 编辑 `backend/data/contracts.json`:
 
@@ -103,7 +150,7 @@ secrets/evm.address    明文地址 —— 用来核对密钥有没有被换过,
 
 ---
 
-## 5. 配置项
+## 7. 配置项
 
 **环境变量三个,都可以不填**(`backend/.env`):
 
@@ -117,7 +164,7 @@ secrets/evm.address    明文地址 —— 用来核对密钥有没有被换过,
 
 ---
 
-## 6. 常见情况
+## 8. 常见情况
 
 | 现象 | 原因 / 处理 |
 |---|---|
@@ -133,7 +180,7 @@ secrets/evm.address    明文地址 —— 用来核对密钥有没有被换过,
 
 ---
 
-## 7. 紧急暂停的最短路径
+## 9. 紧急暂停的最短路径
 
 ```
 1. 连 EVM 钱包登录
@@ -153,7 +200,7 @@ secrets/evm.address    明文地址 —— 用来核对密钥有没有被换过,
 
 ---
 
-## 8. 开发
+## 10. 开发
 
 ```bash
 cd backend  && npm test          # 283 个用例
