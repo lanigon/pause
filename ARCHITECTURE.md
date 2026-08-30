@@ -1,247 +1,291 @@
-# 技术架构
+# 技术方案
 
-多链合约运维控制台。后端 Express + TypeScript(`src/` 58 个文件),
-前端 Vue 3 + Element Plus(`src/` 23 个文件)。测试 283 + 72,覆盖率 80%。
+多链合约运维控制台。勾选合约，批量暂停 / 恢复。EVM 多链 + Tron。
 
-> 操作方式见 [OPERATIONS.md](OPERATIONS.md)。
-> 另有一份更细的参考（架构手册 / 接口逐条 / 前端结构 / 接新链）留在本地 `docs/`，
-> 不入库 —— 那份跟着代码走得快，容易和仓库里的版本对不上。
+后端 Express + TypeScript（`src/` 58 文件），前端 Vue 3 + Element Plus（`src/` 23 文件）。
+测试 283 + 72，覆盖率 80%。
+
+操作方式见 [OPERATIONS.md](OPERATIONS.md)。
 
 ---
 
-## 1. 后端分层
+## 1. 架构分层
 
 ```
-routes/          path → controller，无业务逻辑
-   ↓
-controllers/     只管 HTTP：ETag、SSE 帧、状态码、参数解析        4 个
-   ↓             （与 service 一一对应）
-services/        编排：把 core 的能力按接口的需要串起来           4 个
-   ↓
-core/            领域能力：知道业务，不知道 HTTP                  6 个
-   ↓
+routes/          path → controller
+controllers/     HTTP：ETag、SSE 帧、状态码、参数解析          4 个
+services/        编排：把 core 能力按接口需要串起来            4 个
+core/            领域能力：知道业务，不知道 HTTP               6 个
 lib/             通用能力：不知道这是个合约管理平台
-                 web3 / keys / rpc / lark / utils
-
-repositories/    唯一碰磁盘的层        models/  表结构(zod schema + 推导的类型)
+repositories/    唯一碰磁盘的层
+models/          表结构：zod schema + 推导的类型
 ```
 
-**分层判据是「它知道什么」,不是「它在调谁」:**
+分层判据是「它知道什么」。
 
 | 层 | 检验方式 |
 |---|---|
 | `lib/` | 能整体搬到别的项目 |
 | `core/` | 能脱离 Express 单测 |
-| `services/` | 和某个 controller 一一对应 |
+| `services/` | 与某个 controller 一一对应 |
 
-三条不变量,`npm test` 之外靠 review 守着:
+三条依赖不变量：
 
 ```
-core/ → services/ 或 controllers/          0 处
-lib/  → core/ / services/ / controllers/   0 处
+core/ → services/ 或 controllers/            0 处
+lib/  → core/ / services/ / controllers/     0 处
 每个 controller → 恰好 1 个 service
 ```
 
-### 为什么有 core 这一层
+`core/` 存在的理由是四个文件没有任何 service 装得下。
 
-`core/` 的六个文件里,四个**没有任何一个 service 装得下**:
-
-| 文件 | 消费者跨越了 service 边界 |
+| 文件 | 消费者跨越 service 边界 |
 |---|---|
-| `config` | `server.ts` 启动时就要,还被 3 个 service 用 |
-| `identity` | 主要消费者是**中间件**(每个请求验 JWT) |
-| `contractState` | `/states` 接口**和**执行前置检查共用 |
-| `sync` | `registry.service` **和** `scripts/sync.ts`(CLI)都用 |
-
-另两个(`execution` 268 行、`operations` 22 行)是执行编排与操作闭集。
-
-能力层没有放进 `lib/`,因为 `core/execution` 依赖 `core/config`,
-搬进去会立刻打破 `lib/` 对上层零依赖 —— 那正是它能整体搬走的原因。
+| `config` | `server.ts` 启动即用，另有 3 个 service |
+| `identity` | 主要消费者是中间件（每请求验 JWT） |
+| `contractState` | `/states` 与执行前置检查共用 |
+| `sync` | `registry.service` 与 `scripts/sync.ts` 都用 |
 
 ---
 
-## 2. 前后端交互
+## 2. 功能模块
 
-13 个接口。前端不直接碰任何后端内部结构 —— 唯一的契约是
-`{ success, data, error }` 这个信封加上 `/registry` 下发的那份数据。
-
-### 认证
-
-```
-连 EVM 钱包 → 前端自己拼挑战消息（含时间戳 + 随机数）→ 钱包签名
-           → POST /auth/login → 后端用逐字相同的模板重建消息验签 → 发 JWT
-```
-
-**不需要服务端 nonce** —— 省一次往返，服务端也不用存状态。防重放靠时间窗
-（±2 分钟）+ 已用签名内存去重（5 分钟）。
-
-**JWT 只存前端内存**，不进 localStorage：刷新页面就要重新签名登录。
-代价是多点一次钱包，换来的是这台机器上任何别的脚本都读不到它。
-后端的签名密钥生产环境每次启动随机生成，所以后端一重启所有人也要重登。
-
-**只有 EVM 参与登录** —— 身份就是一个 EVM 地址。Tron 钱包只用于钱包模式发交易，
-连上不会让你登录进去（顶栏下拉里标着这一点）。
-
-### 谁负责什么
-
-| | 前端 | 后端 |
+| 模块 | 位置 | 职责 |
 |---|---|---|
-| 合约/链/业务线清单 | 只渲染 | **唯一数据源**（`/registry`） |
-| 链上状态 | **自己读**（Multicall3） | 兜底（`/states`） |
-| 钱包模式发交易 | **自己签自己发** | 只收一条日志 |
-| GPG 模式发交易 | 只发一个请求、看进度 | **全程后端做** |
-| 交易日志 | 展示 | **唯一写入方**（地址从 JWT 填） |
-
-链上状态由前端读，是因为不占后端 RPC 配额、切业务线时刷新更快；
-公开 RPC 常常不带 CORS 头会被浏览器拦掉，那时才退回 `/states` 让后端代读。
-
-### 两种执行模式，交互形状完全不同
-
-```
-钱包模式（默认）                      GPG 模式
-────────────────────────             ────────────────────────
-前端逐笔：                            前端一个请求：
-  切链 → 钱包签 → 自己广播              POST /gpg/batch
-  ↓ 每笔广播成功后                       ↓ 响应体就是 SSE 流
-  POST /logs  （status: broadcast）      解密 → 预演 → 签名 → 广播 → 确认
-                                         ↓ 每一步 emit 一个事件
-后端全程不碰私钥                        后端本机 gpg-agent 解密，前端不传密钥材料
-```
-
-一个直接后果：**钱包模式的日志只有 `broadcast` 一条**（前端不等确认），
-而 GPG 模式后端会为同一笔写两条（广播时、确认后，同一个 `hash`）。
-所以前端展示时按 `hash` 去重、保留最新那条 —— 否则钱包模式发出去的交易
-在日志里永远看不见。
-
-### 为什么用 SSE，而且是自己解帧
-
-两个接口的响应体就是 SSE 流：`GET /registry/sync`（同步进度）与
-`POST /gpg/batch`（执行进度）。选它而不是轮询或 WebSocket：进度是**单向**的，
-走的是普通 HTTP（不用额外端口、不用升级协议），断了就是结束。
-
-但浏览器自带的 `EventSource` 两个都用不了 —— 它只支持 GET，也不能带
-`Authorization` 头。所以前端自己读 `ReadableStream` 解 SSE 帧
-（`store/api.ts` 的 `readSse`）。
-
-配套的三个细节：
-
-- 后端每 15s 发一条心跳注释，防中间代理因空闲断连
-- **没有断线重放**。断了就是任务结束，状态由落盘的交易日志兜底 ——
-  重放需要服务端记住每个任务发过什么，那是一整套状态管理，
-  而这里连接断开本身就该中止执行
-- 因此另有 `POST /gpg/cancel`，按**操作者地址**取消而不是按连接：
-  页面刷新后原来那条 SSE 已经没了，但后端任务还在跑
-
-### 配置漂移
-
-前端每次发起 GPG 批量都带上自己看到的 `expectedConfigVersion`，
-和后端当前的比对，不一致直接拒（`CONFIG_CHANGED`）。
-
-这道挡的是：运维打开页面 → 有人改了合约清单并热重载 → 运维按着**旧列表**
-点了批量暂停。`/registry` 还带 `ETag`，配置没变时轮询连响应体都不用传。
+| 配置注册表 | `core/config` | 加载 + 跨文件引用校验 + 建索引 + 预算 DTO |
+| 执行编排 | `core/execution` | 授权 → 前置检查 → 按链并行 → 事件汇总 |
+| 数据同步 | `core/sync` | 飞书表格拉取 → 比对 → 有差异才写盘 |
+| 状态读取 | `core/contractState` | 按链批量读 `paused()` |
+| 身份令牌 | `core/identity` | JWT 签发与校验 |
+| 操作定义 | `core/operations` | 操作闭集 + 前置条件 + 预期结果 |
+| 链适配 | `lib/web3` | EVM / Tron 两套 adapter + 公共批量循环 |
+| 密钥 | `lib/keys` | GPG 解密 + 签名子进程 |
+| RPC | `lib/rpc` | 三级降级：Lark → Alchemy → ChainList |
 
 ---
 
-## 3. 链层:两个 adapter
+## 3. 数据流
 
-接一条新链族 = 实现一个接口 + 改一行注册表,services / controllers / 前端零改动。
+```
+配置来源                     运行时
+────────                    ────────
+飞书表格 ─┐                  前端 ─── Multicall3 ──→ 链上（读状态，主路径）
+          ├→ data/*.json      │
+本地编辑 ─┘      │             └─── GET /states ──→ 后端 ─→ 链上（兜底）
+                 ↓
+          core/config 校验 ──→ DTO（内存预算）──→ GET /registry ──→ 前端渲染
+                                                        ↓
+                                              交易日志 data/operations.json
+```
 
-| | **ChainMetaAdapter** | **ChainTxAdapter** |
+配置改动必须经 `core/config` 的跨文件校验，引用不存在的链或业务线时服务起不来。
+
+链上状态默认由前端读，理由是不占后端 RPC 配额、切业务线时刷新更快。
+公开 RPC 常无 CORS 头会被浏览器拦截，此时退回 `GET /states`。
+
+---
+
+## 4. 时序图
+
+### 登录
+
+```mermaid
+sequenceDiagram
+    participant U as 运维
+    participant F as 前端
+    participant W as EVM 钱包
+    participant B as 后端
+
+    U->>F: 点「EVM」
+    F->>F: 拼挑战消息（时间戳 + 随机数）
+    F->>W: personal_sign
+    W-->>F: signature
+    F->>B: POST /auth/login
+    B->>B: 同模板重建消息 → verifyMessage
+    B->>B: 查 operators.json 白名单
+    B->>B: 时间窗 ±2min + 已用签名去重 5min
+    B-->>F: accessToken（8h）
+    F->>F: 存内存，不进 localStorage
+```
+
+### GPG 批量执行
+
+```mermaid
+sequenceDiagram
+    participant F as 前端
+    participant B as 后端
+    participant G as gpg-agent
+    participant C as 链
+
+    F->>B: POST /gpg/batch（不含任何密钥材料）
+    B->>B: configVersion 比对 + 链族密钥检查
+    Note over B: 校验不过走 JSON 错误，尚未切 SSE
+    B-->>F: 响应体转为 SSE 流
+    B->>G: 解密密钥
+    G-->>B: 私钥（仅子进程内存）
+    B->>B: 派生地址 == secrets/<链族>.address
+    B-->>F: event: decrypt
+    loop 每个合约
+        B->>C: eth_call 预演
+        B-->>F: event: simulate
+        B->>B: 子进程内签名
+        B->>C: 广播
+        B-->>F: event: broadcast
+        B->>C: 等回执 + 复查状态
+        B-->>F: event: confirmed
+    end
+    B-->>F: event: done
+```
+
+### 钱包模式执行
+
+```mermaid
+sequenceDiagram
+    participant F as 前端
+    participant W as 钱包
+    participant C as 链
+    participant B as 后端
+
+    loop 每个合约
+        F->>W: 切链（EIP-3326 / TIP-3326）
+        F->>W: sendTransaction
+        W->>C: 广播
+        C-->>F: hash
+        F->>B: POST /logs（status: broadcast）
+    end
+```
+
+后端全程不碰私钥，只收日志。
+
+---
+
+## 5. 接口
+
+13 个。响应统一 `{ success, data, error }`。除前两个外全部需要 JWT。
+
+| 方法 | 路径 | 说明 |
 |---|---|---|
-| 性质 | 纯函数,不碰网络 | 所有网络 IO |
-| 内容 | 地址校验 / 归一化 / 展示 / 浏览器链接 | 批量读、预演、批量执行、健康探测 |
+| GET | `/health` | 存活探针，无需认证 |
+| POST | `/auth/login` | 钱包签名登录，唯一发 token 的接口 |
+| GET | `/registry` | 配置全量，带 ETag，纯内存 |
+| GET | `/registry/sync` | SSE。先与飞书表格比对再给数据 |
+| GET | `/states` | 链上状态兜底 |
+| POST | `/registry/reload` | 热重载，仅 admin |
+| POST | `/gpg/batch` | SSE。响应体即执行进度流 |
+| POST | `/gpg/cancel` | 按操作者地址取消 |
+| GET | `/logs` | 交易日志，倒序分页 + 时间窗 |
+| GET | `/logs/daily` | 每日笔数，日期选择器角标 |
+| POST | `/logs` | 钱包模式广播后上报 |
+| GET | `/state` | 系统快照，纯内存 |
+| GET | `/state/rpc` | 各链 RPC 探测，慢一个量级 |
 
-公共层约 330 行,链专属约 730 行。公共层真正的**逻辑**只有 `runner.ts` 一个批量循环 ——
-各链差异通过 `BatchStrategy`(`simulate` / `build` / `broadcast` / `settle` 四个函数)注入。
+`/state` 与 `/state/rpc` 拆开的理由是快慢差一个量级，合并会让顶栏健康指示被节点探测拖住。
 
-**循环里没有「序号」这个概念。** nonce 是 EVM 特有的(Tron 靠 ref_block 时间窗,
-Solana 靠 recent blockhash),整个待在 `evm/nonce.ts`,runner 和其它链族都不知道它存在。
+---
 
-| | EVM | Tron |
+## 6. 身份验证
+
+| 环节 | 机制 |
+|---|---|
+| 挑战消息 | 前端自拼（含时间戳 + 随机数），后端逐字重建后验签 |
+| 服务端 nonce | 不需要。省一次往返，服务端不存状态 |
+| 防重放 | 时间窗 ±2 分钟 + 已用签名内存去重 5 分钟 |
+| 白名单 | `data/operators.json`，地址不在其中返回 403 |
+| 令牌 | JWT HS256 自实现，8 小时，不引第三方库以减攻击面 |
+| 签名密钥 | 生产每次启动随机生成；开发缓存 `secrets/.jwt-dev` |
+| 前端存储 | 只存内存。刷新页面重新登录 |
+| 传输 | `Authorization` 头；SSE 因 EventSource 限制走 query，且仅对 GET 生效 |
+
+登录只认 EVM 签名。Tron 钱包仅用于钱包模式发交易，不参与登录，顶栏下拉标注此点。
+
+授权分三层，各管一件事，不重复。
+
+| 层 | 内容 | 拦截位置 |
 |---|---|---|
-| 防重放 | nonce,严格递增无空洞 | ref_block + expiration(60s 过期) |
-| 批量读 | Multicall3,一次 RPC | 受限并发 |
-| 批量写 | 地址锁内串行取号 | 必须串行(并发会判重复交易) |
-| 卡住的救援 | gas 阶梯重发 + 自转账让 nonce | 不需要(过期即作废,不堵后面) |
+| 能否登录 | 白名单 + 验签 | `auth.service` |
+| 能否写 | 角色不是 viewer | `requireWriteRole` 中间件 |
+| 有无密钥 | 所选合约的每个链族都配了密钥 | `assertAuthorized` |
+
+不做部分放行。半停半没停的中间态比全不执行更危险。
 
 ---
 
-## 4. 六个关键决策
-
-**① 配置能错就让它启动时错**
-`core/config` 做跨文件引用完整性校验:合约引用了不存在的链或业务线 → **服务起不来**。
-一个拼错的 id 让某个合约在界面上凭空消失,是最难发现的故障。
-
-**② 口令从不经过 HTTP**
-前端不输入也不传任何密钥材料。GPG 解密由服务器本机的 gpg-agent + pinentry 负责,
-私钥只在一次性子进程内存里,用完 `exit`。派生地址必须与 `secrets/<链族>.address` 一致,
-否则立即中止 —— 防密钥被掉包。
-
-**③ 上链保障:等回执 → 查状态 → 同 nonce 提价重发 → 自转账让 nonce**
-运维操作卡在内存池等于没执行。最后那步本质是「取消」,所以前后各查一次链上状态 ——
-**绝不能把一次已经生效的暂停给取消掉**。
-不做的话,卡住的 nonce N 会让 N+1、N+2 永远排不上,同批后面的合约全部
-「广播成功但永不确认」,而界面看起来像都发出去了。
-
-**④ 签名失败中止时,已广播的必须等到终态再一起汇报**
-否则上层以为什么都没发生,既不记日志也不刷界面,而实际上已经有合约被暂停了。
-紧急场景里最危险的一类失败是「看起来没做,其实做了」。
-
-**⑤ 链上状态宁可读不到,也不能读错**
-`paused()` 的返回必须是 32 字节的 0 或 1。解码器会把任何非零值当 true,
-但真正的 Pausable 合约只会返回 0 或 1 —— 返回别的说明这个地址不是我们以为的合约。
-把「地址配错了」显示成「已暂停」,运维就会直接跳过它。前后端三处用同一条判定。
-
-**⑥ 可用性优先于数据新鲜度**
-Lark 同步挂了不挡控制台;解析出 0 个合约一律当异常,绝不覆盖本地
-(表格一次误操作就把合约清空,紧急时会找不到东西可暂停)。
-
----
-
-## 5. 前端
+## 7. 前端数据获取与处理
 
 ```
-store/     唯一的 Pinia store，三块组合：session / catalog / execution
-           三块之间不互相 import，跨块调用只在 index.ts
+store/     唯一 Pinia store，三块组合
+           session    身份与签名方式
+           catalog    配置目录、链上状态、勾选、折叠
+           execution  批量执行与进度事件
 chain/     evm/ 与 tron/ 各一套 read + wallet，index.ts 按链族分派
-components/ 5 个
 ```
 
-**钱包发现走广播式标准**:EVM 用 EIP-6963,Tron 用 TIP-6963 —— 装了多个钱包时
-`window.ethereum` 归谁全看注入顺序,广播式发现让每个钱包各自应答、各带自己的 provider,
-点哪个就用哪个。选定后**绝不回落全局对象**,否则就是「点了 A 却用 B 签名」。
+三块之间不互相 import，跨块调用只在 `store/index.ts`。组件不直接调 api。
 
-> ⚠ 两个事件名大小写不同(`eip6963:` 小写 / `TIP6963:` 大写),别顺手统一。
+| 数据 | 获取方式 | 降级 |
+|---|---|---|
+| 配置 | `GET /registry/sync`（SSE，带同步进度） | `GET /registry` 纯本地 |
+| 链上状态 | 前端 Multicall3 按链批量 | `GET /states` 后端代读 |
+| 交易日志 | `GET /logs` + `/logs/daily` | 失败不阻断加载 |
 
-**链上状态由前端读**:Multicall3 按链批量,不占后端 RPC 配额。
-读不到时(公开 RPC 常常没有 CORS 头)退回 `GET /states` 让后端代读。
+处理上的三条约定：
+
+- 交易日志按 `hash` 去重保留最新状态。GPG 模式后端写两条，钱包模式只有一条，不去重则钱包模式的交易永不显示
+- 日期按本地日历日切分。`ts` 存 UTC，按 UTC 切日会把晚间操作算进次日
+- 执行阶段中文名集中在 `labels.ts`，列表与弹窗共用一份
+
+钱包发现走广播式标准，EVM 用 EIP-6963，Tron 用 TIP-6963。选定 provider 后不回落全局对象，
+否则装了多个钱包时会出现「点了 A 却用 B 签名」。两个事件名大小写不同，`eip6963:` 小写、`TIP6963:` 大写。
 
 ---
 
-## 6. 一条领域事实横跨三处
+## 8. 安全设计
 
-「平台做 pause / unpause」这件事同时活在:
+| 面 | 措施 |
+|---|---|
+| 口令传输 | 从不经过 HTTP。GPG 解密由服务器本机 gpg-agent + pinentry 负责 |
+| 私钥生命周期 | 仅存在于一次性子进程内存，用完 `exit`。gpg 独立进程组，超时杀整组 |
+| 密钥掉包 | 派生地址必须等于 `secrets/<链族>.address`，不等立即中止 |
+| 已签名数据 | rawTx 只在广播函数局部变量存在，不进日志、不进 API、不进前端 |
+| 令牌 | 只存前端内存；后端签名密钥每次启动随机生成，无长期密钥可泄露 |
+| RPC 凭证 | 含 apiKey 的 URL 永久 `public:false`，不下发前端，`/state/rpc` 剔除 `rawUrl` |
+| 访问日志 | 请求头一个都不落盘，`Authorization` 无机会进入日志对象 |
+| 输入校验 | zod 在系统边界校验；GPG 批量额外要求手输 CONFIRM |
+| 操作可追溯 | 日志地址一律从 JWT 填，忽略请求体身份字段 |
+| 危险操作范围 | 操作是编译期可穷举的闭集，调用方无法传入任意合约方法名 |
 
-```
-core/operations.ts        操作语义（有哪些、前置条件、预期结果）
-lib/web3/evm/abi.ts       它在 EVM 上的编码（Solidity ABI）
-frontend/chain/abi.ts     钱包模式的编码（跨包，测试管不到）
-```
-
-分开是对的 —— `core` 是链无关的,Solidity ABI 只对 EVM 成立(Tron 要方法签名字符串,
-Solana 用 IDL)。但**加一种操作忘了改 ABI,编译期查不出来**,要等到
-`encodeFunctionData` 才炸,而那时人已经点了按钮、输过 CONFIRM。
-
-所以:后端用测试守着前两处同步(`executor.test.ts`),
-前端用 `canEncode()` 在编码前挡一道,报人话而不是 ethers 的原始错误。
+链上状态的读取采取「宁可读不到，不可读错」。`paused()` 返回值必须是 32 字节的 0 或 1，
+否则视为读不到。解码器会把任何非零值当 true，而把地址配错显示成「已暂停」会让运维直接跳过该合约。
 
 ---
 
-## 7. 边界与限制
+## 9. 非功能要求
 
-**v1 单实例**:运行中的任务、已用签名去重表存于内存,不支持水平扩展。
-交易日志落盘,重启不丢。
+| 维度 | 现状 |
+|---|---|
+| 可用性 | 优先于数据新鲜度。飞书挂了不挡控制台，解析出 0 个合约不覆盖本地 |
+| 上链保障 | 等回执 → 查状态 → 同 nonce 提价重发（最多 4 次）→ 自转账让出 nonce |
+| 容错 | 单链读失败不影响其它链；单笔失败不中断整批；签名失败中止但已广播的等到终态再汇报 |
+| 一致性 | `expectedConfigVersion` 比对，配置漂移直接拒绝执行 |
+| 性能 | DTO 加载时预算，请求路径零计算；`/registry` 带 ETag |
+| 并发 | 同一 `(链, 签名地址)` 的批次串行；跨链并行 |
+| 可观测 | 每请求 `x-request-id` 回写响应头，链路日志可串回 |
+| 可扩展 | 加 EVM 链零代码；加链族实现一个 adapter + 注册一行 |
+| 部署 | v1 单实例。任务与签名去重表在内存，不支持水平扩展 |
 
-SSE 每 15s 发心跳防代理断连,**没有断线重放** —— 断了就是任务结束,状态由日志兜底。
-另有 `POST /gpg/cancel` 按**操作者地址**取消(不是按连接),
-用于页面刷新后、换设备、代理缓冲这三种「连接已经没了但任务还在跑」的情况。
+---
+
+## 10. 已知边界
+
+SSE 每 15 秒发心跳注释防代理断连，没有断线重放。连接断开即任务结束，状态由落盘日志兜底。
+`POST /gpg/cancel` 按操作者地址取消，覆盖页面刷新、换设备、代理缓冲三种连接已失效的场景。
+
+「平台做 pause / unpause」这条领域事实横跨三处，加操作时需同步。
+
+| 位置 | 内容 | 同步保障 |
+|---|---|---|
+| `core/operations.ts` | 操作语义 | `executor.test.ts` 守着与 ABI 一致 |
+| `lib/web3/evm/abi.ts` | EVM 编码 | 同上 |
+| `frontend/chain/abi.ts` | 钱包模式编码 | 跨包，靠 `canEncode()` 运行时挡下 |
+
+分开的理由是 `core` 链无关，而 Solidity ABI 只对 EVM 成立。Tron 用方法签名字符串，Solana 用 IDL。
