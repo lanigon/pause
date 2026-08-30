@@ -88,6 +88,11 @@ function build(raw: RawConfigBundle): Registry {
     } else if (!meta(chain.type).isValidAddress(contract.address)) {
       // Tron 地址配到 EVM 链上是最常见的手滑
       problems.push(`${where}: 地址 "${contract.address}" 不符合 ${chain.type} 链的格式`)
+    } else if (contract.operator && !meta(chain.type).isValidAddress(contract.operator)) {
+      // operator 同样按链校验：不挡的话要等前端读余额时才发现，那时只表现为一个"读不到"
+      problems.push(
+        `${where}: operator 地址 "${contract.operator}" 不符合 ${chain.type} 链的格式`,
+      )
     }
 
     if (!businessLineIds.has(contract.businessLine)) {

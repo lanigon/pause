@@ -82,7 +82,7 @@ export const login = (address: string, timestamp: number, nonce: string, signatu
 
 /* ── 配置：一个接口拿全 合约 + 链 + RPC ── */
 
-export const getRegistry = () => request<Registry>('/registry')
+// GET /registry 已并入 /registry/sync —— 取数就是一条状态流，结束时给出全量结果
 
 /**
  * 后端兜底的链上状态。

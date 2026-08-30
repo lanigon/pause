@@ -9,7 +9,6 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
  */
 const readStates = vi.fn(async () => new Map([['c1', { contractId: 'c1' }]]))
 const readBusinessLineStates = vi.fn(async () => new Map([['c2', { contractId: 'c2' }]]))
-const loadRegistry = vi.fn(async () => ({ configVersion: 'sha256:new' }))
 
 vi.mock('../src/core/contractState.js', () => ({
   readStates: (...a: unknown[]) => readStates(...(a as [])),
@@ -23,7 +22,6 @@ vi.mock('../src/core/config.js', () => ({
     chains: new Map(),
     contracts: new Map(),
   }),
-  loadRegistry: () => loadRegistry(),
 }))
 vi.mock('../src/core/sync.js', () => ({
   SyncPhase: { SOURCE: 'source', DIFF: 'diff', APPLY: 'apply' },
@@ -31,8 +29,6 @@ vi.mock('../src/core/sync.js', () => ({
 }))
 
 const service = await import('../src/services/registry.service.js')
-
-const actor = (role: string) => ({ address: '0xabc', label: 'A', role }) as never
 
 beforeEach(() => vi.clearAllMocks())
 
@@ -63,27 +59,6 @@ describe('GET /states 的参数分派', () => {
   })
 })
 
-describe('POST /registry/reload 的角色门', () => {
-  it('★ admin 才能重载', async () => {
-    await expect(service.reload(actor('admin'))).resolves.toEqual({ configVersion: 'sha256:new' })
-    expect(loadRegistry).toHaveBeenCalledOnce()
-  })
-
-  it('★ operator 不行 —— 热重载会换掉全局配置，不是普通写操作', async () => {
-    await expect(service.reload(actor('operator'))).rejects.toThrow('只有 admin')
-    expect(loadRegistry).not.toHaveBeenCalled()
-  })
-
-  it('★ viewer 更不行', async () => {
-    await expect(service.reload(actor('viewer'))).rejects.toThrow('只有 admin')
-    expect(loadRegistry).not.toHaveBeenCalled()
-  })
-
-  it('拒绝时绝不能已经把配置重载了（检查必须在动作之前）', async () => {
-    await service.reload(actor('viewer')).catch(() => undefined)
-    expect(loadRegistry).not.toHaveBeenCalled()
-  })
-})
 
 describe('系统状态', () => {
   it('/health 返回运行时长', () => {

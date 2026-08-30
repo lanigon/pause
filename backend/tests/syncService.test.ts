@@ -95,9 +95,11 @@ describe('Lark 同步', () => {
     const result = await syncFromLark(emit, true)
 
     expect(result).toEqual({ changed: false, fromLark: false })
-    // 必须明确告诉前端"用的是本地数据"，不能静默
-    expect(events.at(-1)?.message).toContain('本地数据')
-    expect(events.at(-1)?.ok).toBe(false)
+    // 必须明确告诉前端"用的是本地数据"，不能静默。
+    // 不锁「最后一条」—— force 刷新会在尾部追加一条重载配置的事件
+    const fallback = events.find((e) => e.message.includes('本地数据'))
+    expect(fallback).toBeDefined()
+    expect(fallback?.ok).toBe(false)
     expect(await localContracts()).toEqual(LOCAL)
   })
 
@@ -123,20 +125,44 @@ describe('Lark 同步', () => {
     const result = await syncFromLark(emit, true)
 
     expect(result.changed).toBe(false)
-    expect(events.at(-1)?.code).toBe('APPLY_ROLLED_BACK')
+    expect(events.some((e) => e.code === 'APPLY_ROLLED_BACK')).toBe(true)
     // 关键断言：文件内容回到了同步前
     expect(await localContracts()).toEqual(LOCAL)
   })
 
-  it('内容一致时不写盘，也不重载配置', async () => {
+  it('内容一致时不写盘', async () => {
     const { syncFromLark } = await loadService()
     readTable.mockResolvedValue([row()])
 
     const result = await syncFromLark(emit, true)
 
     expect(result).toEqual({ changed: false, fromLark: true })
-    expect(loadRegistry).not.toHaveBeenCalled()
     expect(events.some((e) => e.message.includes('与本地一致'))).toBe(true)
+    expect(await localContracts()).toEqual(LOCAL) // 没动过磁盘
+  })
+
+  /**
+   * force 是用户点「重新同步」按钮，是显式要求刷新。
+   * 这条覆盖的是原来 POST /registry/reload 那个接口的职责 ——
+   * 手改了 data/*.json 之后，靠这一个动作让它生效。
+   */
+  it('★ force 刷新时总会重载本地配置，哪怕飞书没有变更', async () => {
+    const { syncFromLark } = await loadService()
+    readTable.mockResolvedValue([row()])
+
+    await syncFromLark(emit, true)
+
+    expect(loadRegistry).toHaveBeenCalledOnce()
+    expect(events.some((e) => e.message.includes('已重新加载本地配置'))).toBe(true)
+  })
+
+  it('非 force 时不重载 —— 每次刷页面都重读一遍配置没必要', async () => {
+    const { syncFromLark } = await loadService()
+    readTable.mockResolvedValue([row()])
+
+    await syncFromLark(emit, false)
+
+    expect(loadRegistry).not.toHaveBeenCalled()
   })
 
   it('有差异时写盘 + 重载，并给出人能看懂的变更摘要', async () => {

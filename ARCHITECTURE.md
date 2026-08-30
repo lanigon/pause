@@ -226,15 +226,13 @@ sequenceDiagram
 
 ## 6. 接口
 
-11 个。响应统一 `{ success, data, error }`。除公开的两个外全部需要 JWT。
+9 个。响应统一 `{ success, data, error }`。除公开的两个外全部需要 JWT。
 
 | 分组 | 接口 | 说明 |
 |---|---|---|
 | 公开 | `GET /health` | 存活探针。`npm run check` 与部署探针在用 |
 | 公开 | `POST /auth/login` | 钱包签名登录，唯一发 token 的接口 |
-| 配置 | `GET /registry/sync` | SSE。先与飞书表格比对再给数据，正常加载路径 |
-| 配置 | `GET /registry` | 配置全量，纯内存带 ETag。sync 断流时的降级路径 |
-| 配置 | `POST /registry/reload` | 热重载，仅 admin。手改 `data/` 后不必重启 |
+| 配置 | `GET /registry/sync` | SSE。取数的唯一入口，`?force=1` 顺带重载本地配置 |
 | 链上 | `GET /states` | 状态兜底。前端 multicall 被 CORS 拦时走这条 |
 | 执行 | `POST /gpg/batch` | SSE。响应体即执行进度流 |
 | 执行 | `POST /gpg/cancel` | 按操作者地址取消，不是按连接 |
@@ -242,9 +240,15 @@ sequenceDiagram
 | 审计 | `GET /logs/daily` | 每日笔数，日期选择器角标 |
 | 审计 | `POST /logs` | 钱包模式广播后上报 |
 
-配置分三个接口而非一个，因为语义不同：`sync` 是 SSE 且要等外部服务，
-`registry` 是可缓存的纯内存 GET，`reload` 是改服务端状态的 POST。
-`states` 读的是链上而非配置，合并会让配置接口变慢且不可缓存。
+取数只有 `/registry/sync` 一个入口。它是一条状态流，结束时给出全量配置 ——
+过程中的每一步（拉取 / 比对 / 应用）都是事件，所以不需要另一个接口去问「现在什么情况」。
+`?force=1` 同时承担重载：手改 `data/*.json` 后点「重新同步」即可生效。
+
+原来还有 `GET /registry`（纯内存降级）与 `POST /registry/reload`（admin 热重载），
+都已并入。前者只在 SSE 断流时用，而这是个跑在 localhost 的工具，中间没有会掐长连接的代理；
+后者零调用方，它的职责被 `?force=1` 覆盖了。
+
+`states` 读的是链上而非配置，合并会让配置接口变慢且不可缓存，所以留着。
 
 ---
 
@@ -290,7 +294,7 @@ chain/     evm/ 与 tron/ 各一套 read + wallet，index.ts 按链族分派
 
 | 数据 | 获取方式 | 降级 |
 |---|---|---|
-| 配置 | `GET /registry/sync`（SSE，带同步进度） | `GET /registry` 纯本地 |
+| 配置 | `GET /registry/sync`（SSE，带同步进度） | 无。失败即抛出，用户点「重新同步」重试 |
 | 链上状态 | 前端 Multicall3 按链批量 | `GET /states` 后端代读 |
 | 交易日志 | `GET /logs` + `/logs/daily` | 失败不阻断加载 |
 
@@ -333,7 +337,7 @@ chain/     evm/ 与 tron/ 各一套 read + wallet，index.ts 按链族分派
 | 可靠 | 上链保障 | 等回执 → 查状态 → 同 nonce 提价重发最多 4 次 → 自转账让出 nonce |
 | 可靠 | 容错 | 单链读失败不影响其它链；单笔失败不中断整批；签名失败中止但已广播的等到终态再汇报 |
 | 可靠 | 一致性 | `expectedConfigVersion` 比对，配置漂移直接拒绝执行 |
-| 性能 | 响应 | DTO 加载时预算，请求路径零计算；`/registry` 带 ETag |
+| 性能 | 响应 | DTO 加载时预算，请求路径零计算 |
 | 性能 | 并发 | 同一「链 + 签名地址」的批次串行；跨链并行 |
 | 运维 | 可观测 | 每请求 `x-request-id` 回写响应头，链路日志可串回 |
 | 运维 | 可扩展 | 加 EVM 链零代码；加链族实现一个 adapter + 注册一行 |

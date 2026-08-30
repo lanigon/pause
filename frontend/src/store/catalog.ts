@@ -205,15 +205,15 @@ export function useCatalog(session: Session) {
             syncResult.value = synced.synced
             return synced
           })
-          .catch(async (error: unknown) => {
+          .catch((error: unknown) => {
             syncEvents.value.push({
               phase: 'source',
               at: Date.now(),
               ok: false,
-              message: `同步接口不可用，直接读本地配置：${(error as Error).message}`,
+              message: `加载失败，点「重新同步」重试：${(error as Error).message}`,
               code: 'SYNC_UNAVAILABLE',
             })
-            return api.getRegistry()
+            throw error
           }),
         // 历史日志是次要数据，它挂了不能连合约列表都出不来 ——
         // 这是紧急暂停工具，能操作比能回顾重要

@@ -9,14 +9,12 @@ import type { Registry } from '../src/types'
  * 同步接口挂了必须还能拿到本地配置，否则真出事的时候打不开控制台。
  */
 const syncRegistry = vi.fn()
-const getRegistry = vi.fn()
 const getLogs = vi.fn(async () => ({ items: [] }))
 const getStates = vi.fn(async () => ({}))
 const readStates = vi.fn(async () => new Map())
 
 vi.mock('../src/store/api', () => ({
   syncRegistry: (...args: unknown[]) => syncRegistry(...args),
-  getRegistry: () => getRegistry(),
   getLogs: () => getLogs(),
   getStates: (...args: unknown[]) => getStates(...args),
   setToken: vi.fn(),
@@ -59,7 +57,6 @@ beforeEach(() => {
   setActivePinia(createPinia())
   vi.clearAllMocks()
   syncRegistry.mockResolvedValue({ ...REGISTRY, synced: { changed: false, fromLark: true } })
-  getRegistry.mockResolvedValue(REGISTRY)
 })
 
 describe('加载与降级', () => {
@@ -78,17 +75,20 @@ describe('加载与降级', () => {
     expect(s.registry?.configVersion).toBe('v1')
   })
 
-  it('★ 同步接口挂了要退回本地配置 —— 数据比进度重要', async () => {
+  /**
+   * 取数就是这条状态流本身，没有第二条路了（GET /registry 已并入 /registry/sync）。
+   * 所以失败时必须让调用方知道，并且原因要摆进同步面板 ——
+   * 静默失败会让界面停在空白，用户不知道该点什么。
+   */
+  it('★ 同步接口挂了要抛出，并把原因记进同步面板', async () => {
     syncRegistry.mockRejectedValue(new Error('502 Bad Gateway'))
 
     const s = await store()
-    await s.bootstrap()
+    await expect(s.bootstrap()).rejects.toThrow('502')
 
-    // 关键：还是拿到了配置
-    expect(s.registry?.configVersion).toBe('v1')
-    expect(getRegistry).toHaveBeenCalledOnce()
-    // 而且要告诉用户走的是降级路径，不能静默
+    expect(s.registry).toBeNull()
     expect(s.syncEvents[0]?.code).toBe('SYNC_UNAVAILABLE')
+    expect(s.syncEvents[0]?.message).toContain('重新同步')
   })
 
   it('默认勾上第一条业务线，不然进来是一片空白', async () => {
@@ -281,7 +281,7 @@ describe('链上状态', () => {
 
 describe('操作按钮的排序（位置即防误触）', () => {
   it('★ 暂停永远在最右 —— 顺序不能被后端清单左右', async () => {
-    // 后端把 pause 排在前面（bootstrap 走的是 syncRegistry，不是 getRegistry）
+    // 后端把 pause 排在前面（bootstrap 走的是 syncRegistry）
     syncRegistry.mockResolvedValue({
       ...REGISTRY,
       operations: [

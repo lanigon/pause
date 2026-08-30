@@ -20,6 +20,30 @@ const allChecked = computed({
   set: (value: boolean) => store.toggleAll(value),
 })
 
+/**
+ * operator 余额显示。
+ *
+ * 三种情况要分清：没配 operator（—）、读不到（?）、真实数值。
+ * 读不到显示成 0 的话，运维会跑去给一个其实好好的地址充值；
+ * 而真的没气时又和读不到长得一样，反倒没人当回事。
+ */
+const balanceText = (contract: Contract): string => {
+  const balance = store.states.get(contract.id)?.operatorBalance
+  if (balance === undefined) return '读取中…'
+  const symbol = store.chainOf(contract.chain)?.symbol ?? ''
+  // 小额要看清几个零，大额不用；6 位有效数字够运维判断"够不够发几笔"
+  const num = Number(balance)
+  const shown = num === 0 ? '0' : num < 1 ? num.toPrecision(3) : num.toFixed(4)
+  return `${shown} ${symbol}`.trim()
+}
+
+/** 余额为 0 标红 —— 那是"按下去一定失败"，比状态未知更该被看见 */
+const balanceClass = (contract: Contract): string => {
+  const balance = store.states.get(contract.id)?.operatorBalance
+  if (balance === undefined) return 'list__muted'
+  return Number(balance) === 0 ? 'list__danger' : ''
+}
+
 const statusOf = (contract: Contract) => {
   const state = store.states.get(contract.id)
   if (state?.pending) return { text: pendingLabel(state.pending), type: 'warning' as const }
@@ -245,6 +269,26 @@ async function run(operation: Operation) {
           <el-table-column label="状态" width="100">
             <template #default="{ row }: { row: Contract }">
               <el-tag :type="statusOf(row).type" size="small">{{ statusOf(row).text }}</el-tag>
+            </template>
+          </el-table-column>
+
+          <!--
+            operator 余额：紧急暂停时最怕的是按下去才发现那个地址没气了。
+            读不到显示 —— 而不是 0，两者含义完全不同。
+          -->
+          <el-table-column label="operator 余额" width="150">
+            <template #default="{ row }: { row: Contract }">
+              <span v-if="!row.operator" class="list__muted">—</span>
+              <a
+                v-else
+                class="list__addr"
+                :href="explorerAddressUrl(store.chainOf(row.chain), row.operator)"
+                target="_blank"
+                rel="noreferrer"
+                :title="row.operator"
+              >
+                <span :class="balanceClass(row)">{{ balanceText(row) }}</span>
+              </a>
             </template>
           </el-table-column>
 

@@ -92,7 +92,7 @@ secrets/evm.address    明文地址 —— 用来核对密钥有没有被换过,
   "explorer": "https://basescan.org", "symbol": "ETH", "decimals": 18 }
 ```
 
-改完 `POST /api/registry/reload`(需 admin)或重启。
+改完在界面上点侧边栏的「重新同步」即可生效(它会重载本地配置),或重启后端。
 **引用了不存在的链或业务线会在启动时直接报错**,服务起不来 —— 不会等到点下去才发现。
 
 加**新链族**(Solana 等)要写代码 —— 实现一个 `ChainAdapter` + 在 `lib/web3/chains.ts` 注册一行,

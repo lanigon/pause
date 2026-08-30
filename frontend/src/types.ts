@@ -24,6 +24,8 @@ export interface Contract {
   businessLine: string
   chain: string
   address: string
+  /** 有权暂停它的地址。配了就会去读这个地址的原生币余额 */
+  operator?: string
 }
 
 /**
@@ -73,6 +75,13 @@ export interface ContractState {
   pending?: string
   hash?: string
   explorerUrl?: string
+  /**
+   * operator 地址的原生币余额，已按链的精度格式化。
+   *
+   * 读不到就**不写这个字段** —— 显示"—"。写成 0 的话，运维会以为那个地址
+   * 没气了跑去充值；真没气的时候又和"读不到"长得一样，反而没人当回事。
+   */
+  operatorBalance?: string
 }
 
 /** SSE 推来的执行事件 */

@@ -27,98 +27,112 @@
       "name": "Pausable (Morph 实链)",
       "businessLine": "payment",
       "chain": "morph",
-      "address": "0x8A7617475C27B8f461F3CdDeCeA14A73f62C200e"
+      "address": "0x8A7617475C27B8f461F3CdDeCeA14A73f62C200e",
+      "operator": "0xDFcC6aDf45b12abeaa7b44d02524BF70F4E1Df56"
     },
     {
       "id": "tron-usdt-readonly",
       "name": "USDT-TRC20（只读验证用）",
       "businessLine": "payment",
       "chain": "tron",
-      "address": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+      "address": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+      "operator": "TWNYa1eTnfZxUjkYXt6CLjJDLmdKhUWQ6h"
     },
     {
       "id": "payment-router",
       "name": "PaymentRouter",
       "businessLine": "payment",
       "chain": "morph",
-      "address": "0x5300000000000000000000000000000000000011"
+      "address": "0x5300000000000000000000000000000000000011",
+      "operator": "0xDFcC6aDf45b12abeaa7b44d02524BF70F4E1Df56"
     },
     {
       "id": "payment-settlement",
       "name": "SettlementVault",
       "businessLine": "payment",
       "chain": "morph",
-      "address": "0x5300000000000000000000000000000000000002"
+      "address": "0x5300000000000000000000000000000000000002",
+      "operator": "0xDFcC6aDf45b12abeaa7b44d02524BF70F4E1Df56"
     },
     {
       "id": "bridge-l1-gateway",
       "name": "L1StandardBridge",
       "businessLine": "bridge",
       "chain": "ethereum",
-      "address": "0xdC3d3d8a93CF3AAD3bA1c8f85cf960e0f0F4BE4b"
+      "address": "0xdC3d3d8a93CF3AAD3bA1c8f85cf960e0f0F4BE4b",
+      "operator": "0xDFcC6aDf45b12abeaa7b44d02524BF70F4E1Df56"
     },
     {
       "id": "bridge-l2-gateway",
       "name": "L2StandardBridge",
       "businessLine": "bridge",
       "chain": "morph",
-      "address": "0x5300000000000000000000000000000000000010"
+      "address": "0x5300000000000000000000000000000000000010",
+      "operator": "0xDFcC6aDf45b12abeaa7b44d02524BF70F4E1Df56"
     },
     {
       "id": "bridge-messenger",
       "name": "CrossDomainMessenger",
       "businessLine": "bridge",
       "chain": "morph",
-      "address": "0x5300000000000000000000000000000000000007"
+      "address": "0x5300000000000000000000000000000000000007",
+      "operator": "0xDFcC6aDf45b12abeaa7b44d02524BF70F4E1Df56"
     },
     {
       "id": "lending-pool",
       "name": "LendingPool",
       "businessLine": "lending",
       "chain": "morph",
-      "address": "0x5300000000000000000000000000000000000005"
+      "address": "0x5300000000000000000000000000000000000005",
+      "operator": "0xDFcC6aDf45b12abeaa7b44d02524BF70F4E1Df56"
     },
     {
       "id": "lending-oracle",
       "name": "PriceOracle",
       "businessLine": "lending",
       "chain": "polygon",
-      "address": "0x0000000000000000000000000000000000001010"
+      "address": "0x0000000000000000000000000000000000001010",
+      "operator": "0xDFcC6aDf45b12abeaa7b44d02524BF70F4E1Df56"
     },
     {
       "id": "lending-liquidator",
       "name": "Liquidator",
       "businessLine": "lending",
       "chain": "bsc",
-      "address": "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c"
+      "address": "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c",
+      "operator": "0xDFcC6aDf45b12abeaa7b44d02524BF70F4E1Df56"
     },
     {
       "id": "staking-vault",
       "name": "StakingVault",
       "businessLine": "staking",
       "chain": "morph",
-      "address": "0x5300000000000000000000000000000000000006"
+      "address": "0x5300000000000000000000000000000000000006",
+      "operator": "0xDFcC6aDf45b12abeaa7b44d02524BF70F4E1Df56"
     },
     {
       "id": "staking-rewards",
       "name": "RewardDistributor",
       "businessLine": "staking",
       "chain": "morph",
-      "address": "0x5300000000000000000000000000000000000008"
+      "address": "0x5300000000000000000000000000000000000008",
+      "operator": "0xDFcC6aDf45b12abeaa7b44d02524BF70F4E1Df56"
     },
     {
       "id": "perp-clearing",
       "name": "ClearingHouse",
       "businessLine": "perp",
       "chain": "morph",
-      "address": "0x5300000000000000000000000000000000000009"
+      "address": "0x5300000000000000000000000000000000000009",
+      "operator": "0xDFcC6aDf45b12abeaa7b44d02524BF70F4E1Df56"
     },
     {
       "id": "perp-vault",
       "name": "InsuranceFund",
       "businessLine": "perp",
       "chain": "bsc",
-      "address": "0x55d398326f99059fF775485246999027B3197955"
+      "address": "0x55d398326f99059fF775485246999027B3197955",
+      "operator": "0xDFcC6aDf45b12abeaa7b44d02524BF70F4E1Df56"
     },
     {
       "id": "perp-funding",

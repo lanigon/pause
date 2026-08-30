@@ -328,6 +328,29 @@ export async function syncFromLark(emit: SyncEmit, force = false): Promise<SyncR
     }
 
     const result = await runSync(emit)
+
+    /**
+     * 强制刷新时总是重载一次本地配置。
+     *
+     * runSync 只在**飞书有变更**时才 loadRegistry —— 没配飞书、或拉下来和本地
+     * 一致时都不会重载。但「手改了 data/*.json 想让它生效」是真实需求，
+     * 以前靠一个单独的 POST /registry/reload，那个接口零调用方。
+     * 并到这里之后，「重新同步」这一个动作同时覆盖两件事。
+     *
+     * 校验不过时 loadRegistry 会抛，而 core/config 只在 build 成功后才换掉
+     * current，所以沿用的是上一份能跑的配置，不会把服务搞挂。
+     */
+    if (force && !result.changed) {
+      try {
+        await loadRegistry()
+        emit(event(SyncPhase.APPLY, true, '已重新加载本地配置'))
+      } catch (error) {
+        emit(
+          event(SyncPhase.APPLY, false, `本地配置校验不过，沿用上一份：${messageOf(error)}`, 'RELOAD_FAILED'),
+        )
+      }
+    }
+
     lastSyncAt = Date.now()
     lastResult = result
     return result

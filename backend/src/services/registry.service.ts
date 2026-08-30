@@ -1,7 +1,6 @@
-import { dto, loadRegistry } from '../core/config.js'
+import { dto } from '../core/config.js'
 import { readBusinessLineStates, readStates, type ContractState } from '../core/contractState.js'
 import { SyncPhase, syncFromLark, type SyncEvent, type SyncResult } from '../core/sync.js'
-import type { AuthContext } from '../core/identity.js'
 import { AppError, ErrorCode, messageOf } from '../lib/utils/errors.js'
 
 /**
@@ -13,9 +12,6 @@ import { AppError, ErrorCode, messageOf } from '../lib/utils/errors.js'
  *
  * HTTP 的部分（ETag、SSE 帧、状态码）留在 controller，不下沉到这里。
  */
-
-/** GET /registry —— 纯本地，立刻返回。ETag 由 controller 加 */
-export const snapshot = (): ReturnType<typeof dto> => dto()
 
 /**
  * GET /registry/sync —— 先跟 Lark 对一遍再给数据。
@@ -57,15 +53,6 @@ export function states(query: {
   const ids = query.ids?.split(',').map((s) => s.trim()).filter(Boolean) ?? []
   if (ids.length === 0) throw new AppError(ErrorCode.BAD_REQUEST, '需要 businessLine 或 ids 参数')
   return readStates(ids)
-}
-
-/** POST /registry/reload —— 热重载。只有 admin 能做 */
-export async function reload(actor: AuthContext): Promise<{ configVersion: string }> {
-  if (actor.role !== 'admin') {
-    throw new AppError(ErrorCode.FORBIDDEN, '只有 admin 可以重载配置')
-  }
-  const registry = await loadRegistry()
-  return { configVersion: registry.configVersion }
 }
 
 /* ══ 系统状态 ══════════════════════════════════════════════════════════ */

@@ -2,35 +2,9 @@ import type { Request, Response } from 'express'
 import { z } from 'zod'
 import * as registryService from '../services/registry.service.js'
 import type { SyncEvent } from '../core/sync.js'
-import { currentOperator } from '../middlewares/auth.middleware.js'
 import { validated } from '../middlewares/validate.middleware.js'
 import { ok } from '../lib/utils/response.js'
 import { openSse } from '../lib/utils/sse.js'
-
-/**
- * 前端渲染的唯一数据源：一个接口拿全 链+RPC+合约+业务线。
- *
- * 这一层只管 HTTP：ETag、SSE 帧、状态码、参数解析。
- * 编排在 services/registry.service.ts，能力在 core/。
- *
- * **不按人裁剪** —— 只有一份预计算好的 dto，所有能登录的人看到的内容都一样。
- * 角色的区别只在能不能动（viewer 只读，由 requireWriteRole 在写接口上拦），
- * 别把这里当成权限边界。
- */
-export function getRegistry(req: Request, res: Response): void {
-  const payload = registryService.snapshot()
-
-  // 配置没变就回 304，前端频繁轮询时连响应体都不用传
-  const etag = `W/"${payload.configVersion}"`
-  res.setHeader('ETag', etag)
-  res.setHeader('Cache-Control', 'private, no-cache')
-
-  if (req.header('if-none-match') === etag) {
-    res.status(304).end()
-    return
-  }
-  ok(res, payload)
-}
 
 /**
  * 带同步的加载：先跟 Lark 对一遍，再把数据给前端。
@@ -69,11 +43,6 @@ export const statesQuerySchema = z.object({
 export async function getStates(req: Request, res: Response): Promise<void> {
   const query = validated<z.infer<typeof statesQuerySchema>>(req)
   ok(res, Object.fromEntries(await registryService.states(query)))
-}
-
-/** 热重载配置（admin） */
-export async function postReload(req: Request, res: Response): Promise<void> {
-  ok(res, await registryService.reload(currentOperator(req)))
 }
 
 /* ══ 系统状态 ══════════════════════════════════════════════════════════ */

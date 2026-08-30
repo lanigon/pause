@@ -6,6 +6,10 @@ import { join } from 'node:path'
 import { Wallet } from 'ethers'
 import type { Express } from 'express'
 
+/** 配置版本从进程内的 registry 取 —— 以前是 GET /registry，那个接口已并入 /registry/sync */
+const configVersion = async (): Promise<string> =>
+  (await import('../src/core/config.js')).getConfigVersion()
+
 /**
  * HTTP 层集成测试：路由 → 中间件 → 控制器。
  * 重点是**鉴权边界**：没 token 进不来、viewer 不能写、配置漂移要拦。
@@ -93,13 +97,13 @@ describe('无需鉴权的接口', () => {
 
 describe('★ 鉴权边界', () => {
   it('没有 token → 401', async () => {
-    const res = await request(app).get('/api/registry')
+    const res = await request(app).get('/api/logs')
     expect(res.status).toBe(401)
     expect(res.body.error.code).toBe('UNAUTHORIZED')
   })
 
   it('乱写的 token → 401', async () => {
-    const res = await request(app).get('/api/registry').set('Authorization', 'Bearer garbage')
+    const res = await request(app).get('/api/logs').set('Authorization', 'Bearer garbage')
     expect(res.status).toBe(401)
   })
 
@@ -130,40 +134,11 @@ describe('★ 鉴权边界', () => {
   })
 })
 
-describe('配置下发', () => {
-  it('登录后能拿到 registry', async () => {
-    const token = await tokenFor(ADMIN)
-    const res = await request(app).get('/api/registry').set('Authorization', `Bearer ${token}`)
-
-    expect(res.status).toBe(200)
-    expect(res.body.data.contracts).toHaveLength(1)
-    expect(res.body.data.chains[0].rpcs).toEqual(['https://rpc.morphl2.io'])
-  })
-
-  it('★ 带 ETag 再拉回 304，前端轮询零传输', async () => {
-    const token = await tokenFor(ADMIN)
-    const first = await request(app).get('/api/registry').set('Authorization', `Bearer ${token}`)
-    const etag = first.headers.etag ?? ''
-
-    const second = await request(app)
-      .get('/api/registry')
-      .set('Authorization', `Bearer ${token}`)
-      .set('If-None-Match', etag)
-
-    expect(second.status).toBe(304)
-  })
-
-  it('★ 不下发 operators 名单', async () => {
-    const token = await tokenFor(ADMIN)
-    const res = await request(app).get('/api/registry').set('Authorization', `Bearer ${token}`)
-    expect(Object.keys(res.body.data)).not.toContain('operators')
-  })
-})
 
 describe('★ 角色权限', () => {
   it('viewer 能读', async () => {
     const token = await tokenFor(VIEWER)
-    const res = await request(app).get('/api/registry').set('Authorization', `Bearer ${token}`)
+    const res = await request(app).get('/api/logs').set('Authorization', `Bearer ${token}`)
     expect(res.status).toBe(200)
   })
 
@@ -229,20 +204,18 @@ describe('★ 批量执行的入参校验', () => {
 
   it('合约 id 不存在 → 404', async () => {
     const token = await tokenFor(ADMIN)
-    const reg = await request(app).get('/api/registry').set('Authorization', `Bearer ${token}`)
     const res = await batch(token, {
       operation: 'pause', contractIds: ['ghost'],
-      expectedConfigVersion: reg.body.data.configVersion, confirm: 'CONFIRM',
+      expectedConfigVersion: await configVersion(), confirm: 'CONFIRM',
     })
     expect(res.status).toBe(404)
   })
 
   it('合约列表重复 → 400', async () => {
     const token = await tokenFor(ADMIN)
-    const reg = await request(app).get('/api/registry').set('Authorization', `Bearer ${token}`)
     const res = await batch(token, {
       operation: 'pause', contractIds: ['vault', 'vault'],
-      expectedConfigVersion: reg.body.data.configVersion, confirm: 'CONFIRM',
+      expectedConfigVersion: await configVersion(), confirm: 'CONFIRM',
     })
     expect(res.status).toBe(400)
     expect(res.body.error.message).toMatch(/重复/)

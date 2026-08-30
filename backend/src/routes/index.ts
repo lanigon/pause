@@ -25,12 +25,9 @@ router.post('/auth/login', validateBody(auth.loginSchema), asyncHandler(auth.pos
 // ── 以下全部需要 JWT ──────────────────────────────────────────────────────
 router.use(requireAuth)
 
-// 合约 + 链 + RPC：前端渲染的唯一数据源
-router.get('/registry', registry.getRegistry)
 // 带 Lark 同步的加载：响应是 SSE，先同步再给数据。?force=1 跳过节流
 router.get('/registry/sync', asyncHandler(registry.getRegistryStream))
 router.get('/states', validateQuery(registry.statesQuerySchema), asyncHandler(registry.getStates))
-router.post('/registry/reload', asyncHandler(registry.postReload))
 
 // GPG 批量执行：一个接口，响应是 SSE 流。密钥由后端本地处理，前端不传
 router.post('/gpg/batch', requireWriteRole, validateBody(gpg.batchSchema), asyncHandler(gpg.postBatch))
