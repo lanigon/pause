@@ -82,7 +82,10 @@ secrets/evm.address    明文地址 —— 用来核对密钥有没有被换过,
 
 ```jsonc
 { "id": "my-vault", "name": "My Vault",
-  "businessLine": "payment", "chain": "morph", "address": "0x..." }
+  "businessLine": "payment", "chain": "morph", "address": "0x...",
+  // 可选：有权暂停它的地址。配了就会在列表里显示这个地址的余额 ——
+  // 紧急暂停时最怕按下去才发现那个地址没气了
+  "operator": "0x..." }
 ```
 
 **加一条 EVM 链** —— 编辑 `backend/data/chains.json`,不用填 RPC:
@@ -121,6 +124,7 @@ secrets/evm.address    明文地址 —— 用来核对密钥有没有被换过,
 | 登录后什么都没有 | 只连了 Tron。**Tron 不参与登录**,身份是 EVM 地址,去连 EVM 钱包 |
 | 「配置已更新,请刷新」 | 后端配置在你操作期间变了。刷新页面重新勾选 |
 | 合约状态显示「未知」 | 那条链的 RPC 读不到。**不影响执行** —— 状态读不到不会跳过,交给链上判断 |
+| 余额显示「—」 | 没配 `operator` 地址,或那条链的余额读不到。**不会显示成 0** —— 0 和读不到必须区分 |
 | 提示「请触摸 YubiKey」 | 去按**服务器**上插着的那把 key,不是你本机的 |
 | 报「口令错」但口令没错 | 大概率是 `GNUPGHOME` 没设对。跑 `npm run check` |
 | 交易卡着不确认 | 后端会自动提高 gas 重发(最多 4 次),再不行用自转账让出 nonce。不用手动干预 |
