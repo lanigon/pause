@@ -27,7 +27,6 @@ vi.mock('../src/core/config.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../src/core/config.js')>()),
   getChain: (key: string) => ({ key, name: 'Morph', type: 'evm', chainId: 2818, explorer: 'https://e', confirmations: 1, symbol: 'E', decimals: 18, multicall3: null }),
   getContract: (id: string) => contracts.find((c) => c.id === id),
-  contractsOf: () => contracts,
 }))
 
 // 只让 readBatch 返回预设状态，其余走真实实现

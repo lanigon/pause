@@ -40,7 +40,7 @@ export const evmAdapter: ChainAdapter = {
     reset: resetProviders,
 
     /**
-     * 批量执行。序号管理走统一契约（lib/web3/nonce.ts），各链族一致。
+     * 批量执行。nonce 是 EVM 独有的，整个待在 evm/nonce.ts 里，runner 不知道它存在。
      */
     executeBatch(
       chain: Chain,
@@ -68,7 +68,7 @@ export const evmAdapter: ChainAdapter = {
 
           // 取号在这里 —— build 只在预演通过后才被调用，所以预演失败天然不消耗序号
           build: async (item) => {
-            const next = nonce.next()!
+            const next = nonce.next()
             usedNonce.set(item.id, next)
             return buildUnsigned(chain, item.request, next)
           },

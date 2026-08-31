@@ -309,4 +309,3 @@ async function openSigningSession(params: OpenSessionParams): Promise<SigningSes
   }
 }
 
-// ── 会话控制器 ──────────────────────────────────────────────────────────────

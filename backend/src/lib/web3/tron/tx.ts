@@ -13,7 +13,13 @@ import { logger } from '../../utils/logger.js'
 /** 默认手续费上限：150 TRX（单位 sun） */
 const DEFAULT_FEE_LIMIT = 150_000_000
 
-/** Tron 出块约 3 秒，19 个确认约 60 秒，留一倍余量 */
+/**
+ * 等终态的时间上限。
+ *
+ * Tron 出块约 3 秒，交易的 expiration 是 60 秒 —— 到点还没打包就彻底作废，
+ * 不会像 EVM 那样卡在内存池里。留一倍余量到 120 秒，是给节点回执延迟的空间，
+ * 不是在等更多确认数（只等打包，见 getTransaction 的 receipt.result）。
+ */
 export const CONFIRM_TIMEOUT_MS = 120_000
 
 const POLL_INTERVAL_MS = 3_000

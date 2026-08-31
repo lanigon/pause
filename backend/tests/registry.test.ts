@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { loadRegistry, getChain, getContract, findOperator, contractsOf, dto } from '../src/core/config.js'
+import { loadRegistry, getChain, getContract, findOperator, dto } from '../src/core/config.js'
 import { rpcProvider } from '../src/lib/rpc/rpcProvider.js'
 
 /**
@@ -58,7 +58,6 @@ describe('正常加载', () => {
     expect(getChain('morph').chainId).toBe(2818)
     expect(getContract('vault').name).toBe('Vault')
     expect(findOperator(EVM_ADDR2)?.label).toBe('Alice')
-    expect(contractsOf('payment')).toHaveLength(1)
   })
 
   it('查不存在的东西抛 NOT_FOUND，不返回 undefined 让上层裸奔', async () => {

@@ -41,18 +41,6 @@ describe('记录', () => {
     expect(entry.ts).toMatch(/^\d{4}-\d{2}-\d{2}T/)
   })
 
-  it('批量记录一次写盘', async () => {
-    const repo = await load()
-    await repo.recordMany('0xALICE', [tx({ contract: 'a' }), tx({ contract: 'b' })])
-    expect(await repo.count()).toBe(2)
-  })
-
-  it('空数组不写', async () => {
-    const repo = await load()
-    await repo.recordMany('0xALICE', [])
-    expect(await repo.count()).toBe(0)
-  })
-
   it('★ recordSafe 写失败不抛错，不能拖垮主流程', async () => {
     const repo = await load()
     expect(() => repo.recordSafe('0xALICE', tx())).not.toThrow()

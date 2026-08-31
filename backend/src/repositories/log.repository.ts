@@ -53,23 +53,11 @@ const store = new JsonCollectionStore<OperationLog>({
 
 export const init = (): Promise<void> => store.load()
 
-export const count = (): Promise<number> => store.count()
-
 /** 地址由调用方从 JWT 取，**绝不采信请求体里的身份字段** */
 export async function record(address: string, input: OperationLogInput): Promise<OperationLog> {
   const entry: OperationLog = { ...input, address, ts: new Date().toISOString() }
   await store.append(entry)
   return entry
-}
-
-/** 批量写：一次 GPG 任务会产生一串日志，合并写盘比逐条快得多 */
-export async function recordMany(
-  address: string,
-  inputs: readonly OperationLogInput[],
-): Promise<void> {
-  if (inputs.length === 0) return
-  const ts = new Date().toISOString()
-  await store.appendMany(inputs.map((input) => ({ ...input, address, ts })))
 }
 
 /** 写日志失败不能拖垮主流程 */

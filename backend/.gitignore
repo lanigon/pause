@@ -18,7 +18,7 @@ secrets/
 !.env.example
 
 # ── 运行时数据 ──────────────────────────────────────────────────────────
-# data/ 下的配置类 json（chains / contracts / operators / signers / rpc）要入库，
+# data/ 下的配置类 json（chains / contracts / operators / rpc / sync）要入库，
 # 只有操作日志是运行时产物。
 data/operations.json
 

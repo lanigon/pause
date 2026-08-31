@@ -36,8 +36,6 @@ export interface BatchPlan {
  */
 const running = new Map<AbortController, string>()
 
-export const activeCount = (): number => running.size
-
 /** 取消该操作员正在跑的批量任务，返回中止了几个 */
 export function cancelFor(address: string): number {
   let count = 0

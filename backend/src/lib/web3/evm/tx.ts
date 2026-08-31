@@ -31,11 +31,6 @@ export interface GasPolicy {
 }
 
 /**
- * 运维操作卡在内存池是不可接受的（紧急暂停晚十分钟等于没暂停），
- * 所以首发就给节点推荐值的若干倍，超时后翻倍重发。
- * 以太坊主网单独给更激进的参数：出块慢、竞争激烈、失败代价高。
- */
-/**
  * 等几个确认。
  *
  * 就等 1 个 —— 拿到回执之后我们**还会再读一次链上状态**确认 paused 真的变了
@@ -54,6 +49,11 @@ const CONFIRMATIONS = 1
  */
 const NONCE_RELEASE_MULTIPLIER = 24
 
+/**
+ * 运维操作卡在内存池是不可接受的（紧急暂停晚十分钟等于没暂停），
+ * 所以首发就给节点推荐值的若干倍，超时后翻倍重发。
+ * 以太坊主网单独给更激进的参数：出块慢、竞争激烈、失败代价高。
+ */
 const DEFAULT_POLICY: GasPolicy = { initialMultiplier: 2, receiptTimeoutMs: 10_000, maxAttempts: 4 }
 const POLICY_BY_CHAIN_ID = new Map<number, GasPolicy>([
   [1, { initialMultiplier: 8, receiptTimeoutMs: 30_000, maxAttempts: 4 }],

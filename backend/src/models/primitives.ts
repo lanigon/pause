@@ -3,8 +3,8 @@ import { z } from 'zod'
 /**
  * 各张表共用的字段校验原语。
  *
- * 单独成文件是因为它们**跨表**：地址同时出现在 chains / contracts /
- * operators / signers 四张表里。放进其中任何一个 model，另外三个就得反向
+ * 单独成文件是因为它们**跨表**：id 与地址同时出现在 chains / contracts /
+ * operators 三张表里。放进其中任何一个 model，另外两个就得反向
  * 依赖它，模型之间会织出一张网。抽到这里，依赖就都是单向的。
  */
 
@@ -12,7 +12,7 @@ import { z } from 'zod'
  * EVM 地址：只校验形状，checksum 由 adapter 归一化。
  *
  * 只有 operators.json 用它 —— 登录只认 EVM 签名，这是设计决定，不随链族变。
- * **合约地址不用它**：那是按链分派的，见 registry.service 的引用完整性校验。
+ * **合约地址不用它**：那是按链分派的，见 core/config 的引用完整性校验。
  */
 export const evmAddress = z.string().regex(/^0x[0-9a-fA-F]{40}$/, '不是合法的 EVM 地址')
 

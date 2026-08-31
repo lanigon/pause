@@ -6,10 +6,10 @@ import { messageOf } from '../lib/utils/errors.js'
  * 服务于 registry.controller。
  *
  * 这一层只做**编排**：把 core/ 里的能力按接口的需要串起来。
- * 配置本身的真相在 core/config.ts，同步在 core/sync.ts，读链上状态在
- * core/contractState.ts —— 它们都不知道 HTTP 的存在，所以能各自单测。
+ * 配置本身的真相在 core/config.ts，同步在 core/sync.ts ——
+ * 它们都不知道 HTTP 的存在，所以能各自单测。
  *
- * HTTP 的部分（ETag、SSE 帧、状态码）留在 controller，不下沉到这里。
+ * HTTP 的部分（SSE 帧、状态码）留在 controller，不下沉到这里。
  */
 
 /**
@@ -38,10 +38,6 @@ export async function syncAndSnapshot(
     return { ...dto(), synced: { changed: false, fromLark: false } }
   }
 }
-
-/**
- * GET /states —— 读链上状态。二选一：整条业务线，或指定一批合约 id。
- * 前端平时自己 multicall，这个接口是它没有可用 RPC 时的兜底。
 
 /* ══ 系统状态 ══════════════════════════════════════════════════════════ */
 

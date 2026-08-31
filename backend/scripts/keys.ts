@@ -4,12 +4,12 @@
  * ═══════════════════════════════════════════════════════════════════════════
  *
  *   npm run keys encrypt   |  pnpm keys encrypt    加密私钥到固定文件
- *   npm run keys verify    |  pnpm keys verify     解密验证并比对 operators.json
+ *   npm run keys verify    |  pnpm keys verify     解密验证并比对 secrets/<链族>.address
  *   npm run keys status    |  pnpm keys status     查看密钥文件状态（不解密）
  *
  * 固定约定：secrets/evm.key.gpg · secrets/tron.key.gpg
  *
- * 两种解锁方式（在 operators.json 的 signer 条目里用 unlock 字段声明）：
+ * 两种解锁方式，**探测出来的、不是配置项**（看密钥文件本身加上卡在不在）：
  *   passphrase  gpg 对称加密（AES256），口令解锁
  *   yubikey     加密给 YubiKey 上的 OpenPGP 密钥，PIN + 触摸解锁
  *
@@ -34,16 +34,19 @@ import {
   decryptArgsWithSecret,
   isCardBlocked,
   encryptArgs,
+  gpgBinary,
   gpgEnv,
   readCardStatus,
   remainingPinAttempts,
 } from '../src/lib/keys/gpg.js'
+import { env } from '../src/config/env.js'
 
 type Family = 'evm' | 'tron'
 
 const FAMILIES: readonly Family[] = ['evm', 'tron']
-const SECRETS_DIR = './secrets'
-const GPG = process.env.GPG_BINARY ?? 'gpg'
+// 路径与 gpg 位置都从 env 取，不在这里另写一份 —— 两条取值路径迟早会分叉
+const SECRETS_DIR = env.SECRETS_DIR
+const GPG = gpgBinary()
 
 const secretPath = (family: Family): string => `${SECRETS_DIR}/${family}.key.gpg`
 const addressFile = (family: Family): string => `${SECRETS_DIR}/${family}.address`
@@ -598,7 +601,7 @@ async function main(): Promise<void> {
 用法（npm / pnpm 都支持）：
 
   npm run keys encrypt   |  pnpm keys encrypt    加密私钥到 secrets/<链族>.key.gpg
-  npm run keys verify    |  pnpm keys verify     解密验证并比对 operators.json
+  npm run keys verify    |  pnpm keys verify     解密验证并比对 secrets/<链族>.address
   npm run keys status    |  pnpm keys status     查看密钥文件状态（不解密）
   npm run keys doctor    |  pnpm keys doctor     ★ 一条命令验完整条链路
 

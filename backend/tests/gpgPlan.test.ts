@@ -34,7 +34,7 @@ vi.mock('../src/core/execution.js', () => ({
   Phase: { ERROR: 'error', DONE: 'done' },
 }))
 
-const { plan, cancelFor, activeCount, abortAll } = await import('../src/services/gpg.service.js')
+const { plan, cancelFor, abortAll } = await import('../src/services/gpg.service.js')
 
 const actor = { address: '0xAlice', label: 'Alice', role: 'operator' } as never
 const base = {
@@ -75,7 +75,6 @@ describe('plan() 的校验：全部挡在读口令之前', () => {
 describe('cancelFor：按人取消，不能误伤别人', () => {
   it('没有任务在跑时返回 0', () => {
     expect(cancelFor('0xAlice')).toBe(0)
-    expect(activeCount()).toBe(0)
   })
 
   it('★ 地址比较不分大小写 —— JWT 里是 checksum 形式，传进来的可能是小写', () => {

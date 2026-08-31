@@ -27,10 +27,10 @@ import { logger } from '../lib/utils/logger.js'
  *  交易执行器 —— 批量操作的编排中枢
  * ═══════════════════════════════════════════════════════════════════════════
  *
- * 流程：前置检查（读当前状态，见 contractState.service）→ 按链分组**并行**
+ * 流程：前置检查（读当前状态，见 core/contractState）→ 按链分组**并行**
  *      → 各链 adapter.executeBatch → 每一步 emit 事件（SSE 推前端 + 写操作日志）→ 汇总
  *
- * 这里只有会改链上状态的那一半。纯只读的状态查询在 contractState.service，
+ * 这里只有会改链上状态的那一半。纯只读的状态查询在 core/contractState，
  * 它的调用方（controller）不该为了读一个 paused 就把整条写路径拖进来。
  *
  * 它不知道私钥从哪来（sign 是注入的回调），也不知道事件推到哪去（emit 是注入的），
@@ -143,7 +143,7 @@ export function assertAuthorized(params: {
 
 
 /**
- * 授权**不在这里查**：batch.service.plan() 已经查过，而且必须由它查 ——
+ * 授权**不在这里查**：services/gpg 的 plan() 已经查过，而且必须由它查 ——
  * 那是读 passphrase 之前的最后一道关。从 plan() 到这里没有任何一步能改动
  * contracts / signers，再查一遍只会让人以为两处各管一半，将来删错那一处。
  */

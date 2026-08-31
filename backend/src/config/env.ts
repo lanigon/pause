@@ -12,7 +12,7 @@ loadDotenv()
  * 除了两个**密钥**，其余全是代码里的常量 —— 这是个本地运行的运维工具，
  * 端口、超时、路径这些不需要按环境变化，做成配置项只会多一处出错的地方。
  *
- * 要配的环境变量只有两个，都是"这台机器特有的位置/凭证"，做不成常量：
+ * 真正要配的环境变量只有一个，它是"这台机器特有的凭证"，做不成常量：
  *   ALCHEMY_API_KEY  RPC 三级降级里的第二级，不填就降级到 Lark / ChainList
  *
  * 另外读了两个但都有默认值、平时不用管：
@@ -44,7 +44,7 @@ const LOG_LEVEL = isProduction ? 'info' : 'debug'
 /** 前端来源。本地工具，前端就跑在这台机器上 */
 const CORS_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173']
 
-/** 全部 JSON 数据：chains / contracts / operators / signers / rpc / operations */
+/** 全部 JSON 数据：chains / contracts / operators / rpc / sync / operations */
 const DATA_DIR = './data'
 /** GPG 加密的运维私钥，已 gitignore */
 const SECRETS_DIR = './secrets'
@@ -56,9 +56,6 @@ const JWT_TTL_SECONDS = 8 * 3600
 
 /** 整个批量任务的超时上限（含解密 + 全部签名 + 等待上链） */
 const GPG_JOB_TIMEOUT_MS = 180_000
-
-/** SSE 心跳间隔，防中间代理因空闲断连 */
-const SSE_HEARTBEAT_MS = 15_000
 
 /**
  * JWT 签名密钥。
@@ -107,5 +104,4 @@ export const env = {
   JWT_SECRET,
   JWT_TTL_SECONDS,
   GPG_JOB_TIMEOUT_MS,
-  SSE_HEARTBEAT_MS,
 } as const

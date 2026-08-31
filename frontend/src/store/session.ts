@@ -18,12 +18,13 @@ export function useSession() {
    * 不能回头再去猜 window.ethereum 现在是谁。
    */
   const wallets = ref<Record<ChainFamily, WalletAdapter | null>>(byFamily<WalletAdapter | null>(() => null))
-  /** 签名模式：tab 切的就是这个 */
   /**
- * 默认钱包签名 —— 它是"用自己的钱包，签之前看得见"的那条路。
- * GPG 走的是后端那把运维密钥，权限更大，要显式切过去才用。
- */
-const mode = ref<SignMode>('wallet')
+   * 签名模式，tab 切的就是这个。
+   *
+   * 默认钱包签名 —— 它是"用自己的钱包，签之前看得见"的那条路。
+   * GPG 走的是后端那把运维密钥，权限更大，要显式切过去才用。
+   */
+  const mode = ref<SignMode>('wallet')
 
   /**
    * 每个链族当前那个账户变更监听的解绑函数。

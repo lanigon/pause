@@ -1,4 +1,4 @@
-/** 与后端 /api/registry 对齐的类型。字段少而关键，多余的一律不取。 */
+/** 与后端 /api/registry/sync 下发的 registry 事件对齐。字段少而关键，多余的一律不取。 */
 
 export type ChainFamily = 'evm' | 'tron' | string
 
@@ -29,7 +29,7 @@ export interface Contract {
 }
 
 /**
- * 操作名由后端 /registry 下发（services/operations.ts 里的那个闭集），前端不再自备清单 ——
+ * 操作名由后端下发（core/operations.ts 里的那个闭集），前端不再自备清单 ——
  * 写死成两个字面量的话，后端每加一种操作，前端都得跟着改一次才用得上。
  * 保留 pause / unpause 只为编辑器提示，写法与上面的 ChainFamily 一致。
  */

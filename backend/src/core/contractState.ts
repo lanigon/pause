@@ -2,7 +2,7 @@ import type { ContractDef } from '../models/contract.model.js'
 import type { ReadCall, ReadResult } from '../lib/web3/types.js'
 import { tx } from '../lib/web3/chains.js'
 import { CONTRACT_READS } from './operations.js'
-import { contractsOf, getChain, getContract } from './config.js'
+import { getChain, getContract } from './config.js'
 import { groupBy } from '../lib/utils/collection.js'
 import { logger } from '../lib/utils/logger.js'
 
@@ -11,14 +11,13 @@ import { logger } from '../lib/utils/logger.js'
  *  合约链上状态 —— 只读查询
  * ═══════════════════════════════════════════════════════════════════════════
  *
- * 从 execution.service 里分出来：那边是写编排（解密、签名、广播、重发），
+ * 从 core/execution 里分出来：那边是写编排（解密、签名、广播、重发），
  * 这边只有 eth_call。两者的失败代价差一个量级 —— 这里读失败最多让前端显示
  * "状态未知"，那边一步出错就是一笔真金白银的交易。放在一个文件里，
  * 改动时得先分辨手上这行属于哪一半。
  *
- * 两个消费者互不相干：
- *   registry.controller  前端的兜底状态查询（纯只读，不该穿过写编排模块）
- *   execution.service    执行前的前置检查
+ * 消费者是 core/execution 的执行前置检查：已经处于目标状态的合约不必再发一笔
+ * 必然 revert 的交易。前端展示用的状态由它自己 multicall 读，不走这里。
  */
 
 /** 单个合约的链上状态快照 */
@@ -47,10 +46,6 @@ export async function readStates(
   for (const states of perChain) for (const state of states) merged.set(state.contractId, state)
   return merged
 }
-
-/** 读一整条业务线（前端切业务线时用） */
-export const readBusinessLineStates = (businessLine: string): Promise<ReadonlyMap<string, ContractState>> =>
-  readStates(contractsOf(businessLine).map((c) => c.id))
 
 async function readChainGroup(
   chainKey: string,

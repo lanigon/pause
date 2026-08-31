@@ -92,7 +92,7 @@ export interface ChainTxAdapter {
    * 约定：预演失败标 SKIPPED 且不消耗序号；单笔失败不中断整批；
    * 签名回调抛错说明密钥有问题，整批中止（抛 SigningAbortedError）。
    *
-   * 公共循环在 web3/executor/runner.ts —— 实现时提供一个 BatchStrategy 即可，
+   * 公共循环在 lib/web3/runner.ts —— 实现时提供一个 BatchStrategy 即可，
    * 这些规则不用重写。
    */
   executeBatch(

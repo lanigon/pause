@@ -7,14 +7,13 @@ import { listOperations } from './operations.js'
 import { AppError, ErrorCode, notFound } from '../lib/utils/errors.js'
 import { logger } from '../lib/utils/logger.js'
 import { rpcProvider } from '../lib/rpc/rpcProvider.js'
-import { groupBy } from '../lib/utils/collection.js'
 
 /**
  * 配置注册表：进程内唯一的配置真相来源。
  *
  * 分工：
  *   config.repository → 读磁盘 + 单文件 schema 校验
- *   registry.service  → 跨文件引用完整性校验 + 建索引 + 生成下发前端的 DTO
+ *   本文件            → 跨文件引用完整性校验 + 建索引 + 生成下发前端的 DTO
  */
 
 interface RegistryDto {
@@ -32,7 +31,6 @@ export interface Registry {
   readonly businessLines: readonly BusinessLine[]
   readonly contracts: ReadonlyMap<string, ContractDef>
   readonly operators: ReadonlyMap<string, Operator>
-  readonly byBusinessLine: ReadonlyMap<string, readonly ContractDef[]>
 }
 
 let current: Registry | null = null
@@ -114,7 +112,6 @@ function build(raw: RawConfigBundle): Registry {
     businessLines: raw.businessLines,
     contracts,
     operators: indexOperators(raw.operators),
-    byBusinessLine: groupBy(raw.contracts, (c) => c.businessLine),
   }
 }
 
@@ -134,9 +131,6 @@ export function getContract(contractId: string): ContractDef {
 
 export const findOperator = (normalizedAddress: string): Operator | undefined =>
   getRegistry().operators.get(normalizedAddress.toLowerCase())
-
-export const contractsOf = (businessLine: string): readonly ContractDef[] =>
-  getRegistry().byBusinessLine.get(businessLine) ?? []
 
 // ── 下发前端的 DTO ──────────────────────────────────────────────────────────
 

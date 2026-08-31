@@ -28,6 +28,3 @@ export const dailyCounts = (range: {
  */
 export const record = (actorAddress: string, input: OperationLogInput): Promise<OperationLog> =>
   logRepo.record(actorAddress, input)
-
-/** 系统状态里的总数 */
-export const count = (): Promise<number> => logRepo.count()

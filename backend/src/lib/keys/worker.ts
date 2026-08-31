@@ -21,7 +21,6 @@ import { GpgKey } from './gpg.js'
 export interface WorkerInit {
   readonly type: 'init'
   readonly family: ChainFamily
-  /** provider 自己的配置，如 GPG 的 unlock 方式 */
   /** 配置里声明的地址；派生出来的必须与它一致 */
   readonly expectedAddress: string
   readonly jobTimeoutMs: number

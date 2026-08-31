@@ -15,7 +15,7 @@ import { AppError, ErrorCode } from '../lib/utils/errors.js'
 
 /**
  * 配置读取。只做三件事：读磁盘 → 解析 ${ENV} → 单文件 schema 校验。
- * 跨文件引用完整性由 registry.service 负责。
+ * 跨文件引用完整性由 core/config 负责。
  *
  * 只有三个配置文件：
  *   chains.json     RPC 数据

@@ -80,15 +80,6 @@ export const login = (address: string, timestamp: number, nonce: string, signatu
     body: JSON.stringify({ address, timestamp, nonce, signature }),
   })
 
-/* ── 配置：一个接口拿全 合约 + 链 + RPC ── */
-
-// GET /registry 已并入 /registry/sync —— 取数就是一条状态流，结束时给出全量结果
-
-/**
- * 后端兜底的链上状态。
- * 前端平时自己 multicall（省后端 RPC 配额），但公开 RPC 很多不带 CORS 头，
- * 浏览器会直接拦掉 —— 那种情况下退回来用这个。
-
 /* ── 交易日志 ── */
 
 /**
