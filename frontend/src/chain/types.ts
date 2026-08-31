@@ -63,6 +63,13 @@ export interface WalletAdapter {
 export type StateReader = (
   chain: Chain,
   contracts: readonly Contract[],
+  /**
+   * 当前连接的这个链族的钱包地址。传了就顺带问一句「它是不是这些合约的 operator」。
+   *
+   * 为什么不靠 getOperators 的返回列表自己判断：那是分页的，第一页装不下时
+   * 列表里没有不等于没权限。钱包模式下判断错的代价是让人白签一笔必然 revert 的交易。
+   */
+  viewer?: string,
 ) => Promise<Map<string, ContractState>>
 
 /* ══ ③ 链族元信息 ═════════════════════════════════════════════════════ */

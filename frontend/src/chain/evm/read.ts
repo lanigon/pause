@@ -1,192 +1,226 @@
 import { Contract, Interface, JsonRpcProvider, formatUnits } from 'ethers'
-import { PAUSABLE_ABI, isBoolWord } from '../abi'
-import type { Chain, Contract as ContractDef, ContractState } from '../../types'
+import { OPERATORS_ABI, OPERATOR_PAGE, PAUSABLE_ABI, isBoolWord } from '../abi'
+import type { Chain, Contract as ContractDef, ContractState, OperatorInfo } from '../../types'
 
 /**
- * 读 EVM 链上的合约状态。
+ * 读 EVM 链上的合约状态、operator 名单与余额。
  *
  * 走 Multicall3：一条链上所有合约一次 RPC 读完。
  * 这条链上没有部署的话（调一个没有代码的地址会失败），回退到并发单点调用。
+ *
+ * **分两轮**，因为第二轮的入参来自第一轮的结果：
+ *   第一轮  paused · getOperators · isOperator(viewer)
+ *   第二轮  第一轮读回来的每个 operator 地址的原生币余额
+ * 两轮各自还是一次 multicall，所以一条链最多两次 RPC 往返。
  */
 
 const MULTICALL3_ABI = [
   'function aggregate3((address target, bool allowFailure, bytes callData)[] calls) view returns ((bool success, bytes returnData)[] returnData)',
-  // Multicall3 自带的余额查询，target 指向它自己即可 ——
-  // 所以 operator 余额能塞进同一批，不多一次 RPC 往返
+  // Multicall3 自带的余额查询，target 指向它自己即可 —— 余额能塞进同一批
   'function getEthBalance(address addr) view returns (uint256 balance)',
 ]
 
 const iface = new Interface(PAUSABLE_ABI)
+const opIface = new Interface(OPERATORS_ABI)
 const mcIface = new Interface(MULTICALL3_ABI)
 
 /**
  * Multicall3 的规范地址，**每条链都一样** —— 它用确定性部署，
  * 所以在几乎所有 EVM 链上都落在这个地址，不需要按链配置。
- * 没部署的链由运行时发现：调一个没有代码的地址会失败，自动回退到单点调用。
  */
 const MULTICALL3 = '0xcA11bde05977b3631167028862bE2a173976CA11'
-/**
- * 一次读。两种：读合约的 paused()，或读某个地址的原生币余额。
- *
- * 余额按**地址**去重（同一个 operator 常常管好几个合约），
- * 拿回来再摊回各合约上 —— 读 N 次同一个地址是白费一次调用。
- */
+
 type Call =
   | { kind: 'paused'; id: string; target: string }
+  | { kind: 'operators'; id: string; target: string }
+  | { kind: 'isOperator'; id: string; target: string; viewer: string }
   | { kind: 'balance'; address: string }
 
-const decode = (key: 'paused', data: string): unknown =>
-  iface.decodeFunctionResult(key, data)[0]
+/** 一轮读回来的东西。读不到的项**不进表**，而不是塞个默认值 */
+interface Reading {
+  readonly paused: Map<string, boolean>
+  readonly operators: Map<string, readonly string[]>
+  readonly viewerIsOperator: Map<string, boolean>
+  readonly balance: Map<string, bigint>
+}
 
-/**
- * bool 返回值必须是 32 字节的 0 或 1。
- *
- * 解码器会把**任何非零值**当成 true，但一个真正的 Pausable 合约只会返回 0 或 1。
- * 返回别的东西说明这个地址根本不是我们以为的合约 —— 比如误配成了预编译地址
- * 0x…0002，它对任意 calldata 都返回一个哈希，尾字节是 1 就会被读成「已暂停」。
- *
- * 紧急暂停时把「地址配错了」显示成「已暂停」是最坏的一种错：
- * 运维会直接跳过这个合约。读不到（显示未知）远好过读错。
- *
- * 后端 lib/web3/evm/client.ts 的 decodeCall 与 tron/client.ts 的 decodeConstant
- * 用的是同一条判定，三处必须一致。
- */
+const emptyReading = (): Reading => ({
+  paused: new Map(),
+  operators: new Map(),
+  viewerIsOperator: new Map(),
+  balance: new Map(),
+})
 
-/** 读一条链上这批合约的 paused 与各自 operator 的余额。返回 contractId → 状态 */
 export async function readEvm(
   chain: Chain,
   contracts: readonly ContractDef[],
+  viewer?: string,
 ): Promise<Map<string, ContractState>> {
   const provider = new JsonRpcProvider(chain.rpcs[0], chain.chainId, { staticNetwork: true })
 
-  const paused: Call[] = contracts.map((contract) => ({
-    kind: 'paused',
-    id: contract.id,
-    target: contract.address,
-  }))
+  const round1: Call[] = contracts.flatMap((contract): Call[] => [
+    { kind: 'paused', id: contract.id, target: contract.address },
+    { kind: 'operators', id: contract.id, target: contract.address },
+    ...(viewer ? [{ kind: 'isOperator' as const, id: contract.id, target: contract.address, viewer }] : []),
+  ])
 
-  // operator 去重：同一个地址管三个合约时只读一次
-  const addresses = [...new Set(contracts.map((c) => c.operator).filter((a): a is string => !!a))]
-  const balances: Call[] = addresses.map((address) => ({ kind: 'balance', address }))
+  const first = await runCalls(provider, round1)
 
-  const calls = [...paused, ...balances]
-  let results: Map<string, ContractState>
-  let balanceByAddress: Map<string, bigint>
-
-  try {
-    ;[results, balanceByAddress] = await readViaMulticall(provider, calls)
-  } catch {
-    // 这条链没部署 Multicall3，或者节点不支持 —— 退回并发单点调用，别整条链读不到
-    ;[results, balanceByAddress] = await readOneByOne(provider, calls)
+  /**
+   * 第二轮的地址来自两处：合约自己声明的 operator，和配置里手填的那个。
+   * 按小写去重 —— 同一个地址常常管好几个合约，读 N 次是白费。
+   */
+  const addresses = new Set<string>()
+  for (const list of first.operators.values()) for (const a of list) addresses.add(a.toLowerCase())
+  for (const contract of contracts) {
+    if (contract.operator) addresses.add(contract.operator.toLowerCase())
   }
 
-  return attachBalances(results, contracts, balanceByAddress, chain)
+  const second = addresses.size
+    ? await runCalls(provider, [...addresses].map((address) => ({ kind: 'balance' as const, address })))
+    : emptyReading()
+
+  return assemble(contracts, chain, first, second.balance)
 }
 
-/**
- * 把按地址读回来的余额摊回各合约。
- *
- * 读不到就**不写这个字段**，界面显示"—"。写成 0 的话运维会以为那个地址
- * 没气了，跑去充值一个其实好好的地址；更糟的是反过来 —— 真没气时
- * 和"读不到"长得一样，就没人当回事了。
- */
-function attachBalances(
-  states: Map<string, ContractState>,
+/** 把两轮的结果摊成 contractId → ContractState */
+function assemble(
   contracts: readonly ContractDef[],
-  balances: Map<string, bigint>,
   chain: Chain,
+  reading: Reading,
+  balances: Map<string, bigint>,
 ): Map<string, ContractState> {
+  const states = new Map<string, ContractState>()
+
+  const format = (address: string): OperatorInfo => {
+    const wei = balances.get(address.toLowerCase())
+    // 读不到就不写 balance 字段，界面显示"—"。写成 0 会让人以为地址没气了
+    return wei === undefined ? { address } : { address, balance: formatUnits(wei, chain.decimals) }
+  }
+
   for (const contract of contracts) {
-    if (!contract.operator) continue
-    const wei = balances.get(contract.operator.toLowerCase())
-    if (wei === undefined) continue
-    states.set(contract.id, {
-      ...states.get(contract.id),
-      operatorBalance: formatUnits(wei, chain.decimals),
-    })
+    const state: ContractState = {}
+    const paused = reading.paused.get(contract.id)
+    if (paused !== undefined) state.paused = paused
+
+    const list = reading.operators.get(contract.id)
+    if (list !== undefined) {
+      state.operators = list.map(format)
+      // 没有总数可问，只能靠"第一页装满了"推断还有下一页
+      if (list.length >= OPERATOR_PAGE) state.operatorsTruncated = true
+    }
+
+    const isOp = reading.viewerIsOperator.get(contract.id)
+    if (isOp !== undefined) state.viewerIsOperator = isOp
+
+    if (contract.operator) {
+      const wei = balances.get(contract.operator.toLowerCase())
+      if (wei !== undefined) state.operatorBalance = formatUnits(wei, chain.decimals)
+    }
+
+    if (Object.keys(state).length > 0) states.set(contract.id, state)
   }
   return states
 }
 
-/** 收集结果。解码失败或形状不对就当没读到 —— 状态未知比状态错了安全 */
-function collect(states: Map<string, ContractState>, id: string, data: string): void {
-  if (!isBoolWord(data)) return
+/** 把一次 Call 编码成 multicall 的一项 */
+function encodeCall(call: Call): { target: string; allowFailure: boolean; callData: string } {
+  switch (call.kind) {
+    case 'paused':
+      return { target: call.target, allowFailure: true, callData: iface.encodeFunctionData('paused') }
+    case 'operators':
+      return {
+        target: call.target,
+        allowFailure: true,
+        callData: opIface.encodeFunctionData('getOperators', [0, OPERATOR_PAGE]),
+      }
+    case 'isOperator':
+      return {
+        target: call.target,
+        allowFailure: true,
+        callData: opIface.encodeFunctionData('isOperator', [call.viewer]),
+      }
+    case 'balance':
+      // 余额查询打给 Multicall3 自己
+      return {
+        target: MULTICALL3,
+        allowFailure: true,
+        callData: mcIface.encodeFunctionData('getEthBalance', [call.address]),
+      }
+  }
+}
+
+/** 把一条返回值归位。解不出来就当没读到 —— 状态未知比状态错了安全 */
+function absorb(call: Call, data: string, into: Reading): void {
   try {
-    states.set(id, { ...(states.get(id) ?? {}), paused: decode('paused', data) === true })
+    switch (call.kind) {
+      case 'paused':
+        // bool 必须是干净的 32 字节 0 或 1：合约地址误配成预编译地址时，
+        // 它对任意调用都返回哈希，长度对但值不是 0/1，解出来就成了"已暂停"，
+        // 紧急暂停会被静默跳过
+        if (!isBoolWord(data)) return
+        into.paused.set(call.id, iface.decodeFunctionResult('paused', data)[0] === true)
+        return
+      case 'operators': {
+        const list = opIface.decodeFunctionResult('getOperators', data)[0] as readonly string[]
+        into.operators.set(call.id, [...list])
+        return
+      }
+      case 'isOperator':
+        if (!isBoolWord(data)) return
+        into.viewerIsOperator.set(call.id, opIface.decodeFunctionResult('isOperator', data)[0] === true)
+        return
+      case 'balance': {
+        const wei = mcIface.decodeFunctionResult('getEthBalance', data)[0] as bigint
+        into.balance.set(call.address.toLowerCase(), wei)
+        return
+      }
+    }
   } catch {
     /* 解码失败就当读不到 */
   }
 }
 
-/** 把一次 Call 编码成 multicall 的一项 */
-const encodeCall = (call: Call): { target: string; allowFailure: boolean; callData: string } =>
-  call.kind === 'paused'
-    ? { target: call.target, allowFailure: true, callData: iface.encodeFunctionData('paused') }
-    : {
-        // 余额查询打给 Multicall3 自己
-        target: MULTICALL3,
-        allowFailure: true,
-        callData: mcIface.encodeFunctionData('getEthBalance', [call.address]),
-      }
-
-/** 把一条返回值归位：paused 进状态表，余额进地址表 */
-function absorb(
-  call: Call,
-  data: string,
-  states: Map<string, ContractState>,
-  balances: Map<string, bigint>,
-): void {
-  if (call.kind === 'paused') {
-    collect(states, call.id, data)
-    return
-  }
+/** 一轮：优先 multicall，这条链没部署就退回并发单点 */
+async function runCalls(provider: JsonRpcProvider, calls: readonly Call[]): Promise<Reading> {
+  if (calls.length === 0) return emptyReading()
   try {
-    const [wei] = mcIface.decodeFunctionResult('getEthBalance', data)
-    balances.set(call.address.toLowerCase(), wei as bigint)
+    return await viaMulticall(provider, calls)
   } catch {
-    /* 读不到就不写，界面显示 — */
+    // 这条链没部署 Multicall3，或者节点不支持 —— 别整条链读不到
+    return oneByOne(provider, calls)
   }
 }
 
-async function readViaMulticall(
-  provider: JsonRpcProvider,
-  calls: readonly Call[],
-): Promise<[Map<string, ContractState>, Map<string, bigint>]> {
-  const states = new Map<string, ContractState>()
-  const balances = new Map<string, bigint>()
+async function viaMulticall(provider: JsonRpcProvider, calls: readonly Call[]): Promise<Reading> {
+  const into = emptyReading()
   const multicall = new Contract(MULTICALL3, MULTICALL3_ABI, provider)
-
   const raw = (await multicall.aggregate3!.staticCall(calls.map(encodeCall))) as [boolean, string][]
 
   calls.forEach((call, index) => {
     const entry = raw[index]
     // 单个调用 revert 不能拖垮整批（allowFailure），失败的跳过
-    if (entry?.[0]) absorb(call, entry[1], states, balances)
+    if (entry?.[0]) absorb(call, entry[1], into)
   })
-  return [states, balances]
+  return into
 }
 
-async function readOneByOne(
-  provider: JsonRpcProvider,
-  calls: readonly Call[],
-): Promise<[Map<string, ContractState>, Map<string, bigint>]> {
-  const states = new Map<string, ContractState>()
-  const balances = new Map<string, bigint>()
-
+async function oneByOne(provider: JsonRpcProvider, calls: readonly Call[]): Promise<Reading> {
+  const into = emptyReading()
   await Promise.all(
     calls.map(async (call) => {
       try {
         // 没有 Multicall3 的链上余额只能直接问节点，不能走 getEthBalance
         if (call.kind === 'balance') {
-          balances.set(call.address.toLowerCase(), await provider.getBalance(call.address))
+          into.balance.set(call.address.toLowerCase(), await provider.getBalance(call.address))
           return
         }
         const encoded = encodeCall(call)
-        collect(states, call.id, await provider.call({ to: encoded.target, data: encoded.callData }))
+        absorb(call, await provider.call({ to: encoded.target, data: encoded.callData }), into)
       } catch {
         /* 忽略单点失败 */
       }
     }),
   )
-  return [states, balances]
+  return into
 }

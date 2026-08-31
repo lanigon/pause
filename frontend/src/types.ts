@@ -82,6 +82,32 @@ export interface ContractState {
    * 没气了跑去充值；真没气的时候又和"读不到"长得一样，反而没人当回事。
    */
   operatorBalance?: string
+  /**
+   * 合约自己声明的 operator 列表（getOperators 的第一页）。
+   *
+   * 和上面配置里那个 operator 是两回事：这个是**链上的真相**，
+   * 配置里那个是人手填的。合约没有这个方法时读不到，字段不写，界面不显示这一块。
+   */
+  operators?: readonly OperatorInfo[]
+  /** 第一页就满了，说明还有更多没列出来 */
+  operatorsTruncated?: boolean
+  /**
+   * 当前连接的钱包是不是这个合约的 operator（合约的 isOperator 说了算）。
+   * 没连钱包、或合约没有这个方法时不写。
+   */
+  viewerIsOperator?: boolean
+}
+
+/**
+ * 从合约上读到的一个 operator。
+ *
+ * 余额读不到就**不写这个字段**，和 operatorBalance 同一条约定 ——
+ * 写成 0 会让人以为地址没气了跑去充值，而真没气时又和读不到长得一样。
+ */
+export interface OperatorInfo {
+  readonly address: string
+  /** 原生币余额，已按链的精度格式化 */
+  readonly balance?: string
 }
 
 /** SSE 推来的执行事件 */

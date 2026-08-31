@@ -37,6 +37,29 @@ const balanceText = (contract: Contract): string => {
   return `${shown} ${symbol}`.trim()
 }
 
+/**
+ * 把余额格成人看的样子。和 balanceText 同一套规则，只是入参不同 ——
+ * 那个查配置里手填的 operator，这个查合约自己声明的每一个。
+ */
+const amountText = (balance: string | undefined, chainKey: string): string => {
+  if (balance === undefined) return '—'
+  const symbol = store.chainOf(chainKey)?.symbol ?? ''
+  const num = Number(balance)
+  const shown = num === 0 ? '0' : num < 1 ? num.toPrecision(3) : num.toFixed(4)
+  return `${shown} ${symbol}`.trim()
+}
+
+/** 余额为 0 标红；读不到只是灰。两者含义完全不同，界面上不能长一样 */
+const amountClass = (balance: string | undefined): string =>
+  balance === undefined ? 'list__muted' : Number(balance) === 0 ? 'list__danger' : ''
+
+/** 这个 operator 是不是你现在连着的那个钱包 */
+function isSelf(contract: Contract, address: string): boolean {
+  const family = store.chainOf(contract.chain)?.type
+  const mine = family ? store.connected[family] : null
+  return !!mine && mine.toLowerCase() === address.toLowerCase()
+}
+
 /** 余额为 0 标红 —— 那是"按下去一定失败"，比状态未知更该被看见 */
 const balanceClass = (contract: Contract): string => {
   const balance = store.states.get(contract.id)?.operatorBalance
@@ -238,7 +261,57 @@ async function run(operation: Operation) {
           </el-button-group>
         </div>
 
-        <el-table v-show="!group.collapsed" :data="group.contracts" size="small">
+        <!--
+          default-expand-all：operator 名单默认展开。
+          它回答的是「谁能动这个合约、他们还有没有气」，紧急时不该再多点一次才看得到。
+        -->
+        <el-table
+          v-show="!group.collapsed"
+          :data="group.contracts"
+          size="small"
+          row-key="id"
+          default-expand-all
+        >
+          <el-table-column type="expand">
+            <template #default="{ row }: { row: Contract }">
+              <div class="ops">
+                <template v-if="store.states.get(row.id)?.operators?.length">
+                  <div
+                    v-for="op in store.states.get(row.id)!.operators"
+                    :key="op.address"
+                    class="ops__row"
+                  >
+                    <a
+                      class="list__addr"
+                      :href="explorerAddressUrl(store.chainOf(row.chain), op.address)"
+                      target="_blank"
+                      rel="noreferrer"
+                      :title="op.address"
+                    >
+                      {{ shorten(op.address, 10, 8) }}
+                    </a>
+                    <span :class="amountClass(op.balance)">
+                      {{ amountText(op.balance, row.chain) }}
+                    </span>
+                    <el-tag v-if="isSelf(row, op.address)" size="small" type="success" effect="plain">
+                      你
+                    </el-tag>
+                  </div>
+                  <div v-if="store.states.get(row.id)?.operatorsTruncated" class="ops__more">
+                    只列出前 {{ store.states.get(row.id)!.operators!.length }} 个，合约上还有更多
+                  </div>
+                </template>
+
+                <!-- 合约没有 getOperators、或那条链读不到时不编故事，直说 -->
+                <span v-else class="list__muted">读不到 operator 名单</span>
+
+                <div v-if="store.states.get(row.id)?.viewerIsOperator === false" class="ops__warn">
+                  你当前的钱包不是这个合约的 operator，钱包模式下会失败
+                </div>
+              </div>
+            </template>
+          </el-table-column>
+
           <el-table-column width="46">
             <template #default="{ row }: { row: Contract }">
               <el-checkbox

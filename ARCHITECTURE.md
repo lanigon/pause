@@ -98,7 +98,7 @@ lib/  → core/ / services/ / controllers/     0 处
 | 配置管理 | 渲染业务线与合约、勾选、折叠 | 加载、跨文件校验、建索引、预算 DTO | `core/config` · `services/registry` |
 | 数据同步 | 展示同步进度 | 拉飞书表格、与本地比对、有差异才写盘 | `core/sync` · `lib/lark` |
 | 状态监控 | Multicall3 自读，主路径 | 兜底代读，按链批量 | `chain/*/read` · `core/contractState` |
-| 余额预警 | 与状态同一次 multicall 顺带读 | 只在配置里下发 `operator` 地址 | `chain/*/read` |
+| 权限与余额 | 读合约的 `getOperators` / `isOperator`，再查每个 operator 的主链币余额 | 只下发合约地址 | `chain/*/read` |
 | 批量执行·钱包 | 切链、逐笔签名、广播 | 只收一条日志 | `chain/*/wallet` |
 | 批量执行·GPG | 发一个请求、渲染进度流 | 解密、预演、签名、广播、确认 | `core/execution` · `services/gpg` · `lib/keys` |
 | 操作审计 | 按日期查看、按 hash 去重展示 | 唯一写入方，地址从 JWT 填 | `services/log` · `repositories/log` |
@@ -132,7 +132,7 @@ flowchart LR
     CHAIN[("链上")]
     LOG[("operations.json")]
 
-    UI -->|"Multicall3：paused + operator 余额，一次读完"| CHAIN
+    UI -->|"两轮 Multicall3：先 paused+名单，再按名单查余额"| CHAIN
     UI -->|"GET /states 兜底"| BE
     BE -->|"按链批量 eth_call"| CHAIN
 
@@ -297,10 +297,14 @@ chain/     evm/ 与 tron/ 各一套 read + wallet，index.ts 按链族分派
 |---|---|---|
 | 配置 | `GET /registry/sync`（SSE，带同步进度） | 无。失败即抛出，用户点「重新同步」重试 |
 | 链上状态 | 前端 Multicall3 按链批量 | `GET /states` 后端代读 |
-| operator 余额 | 与链上状态同一次 multicall | 读不到就不显示，不退回后端 |
+| operator 名单与余额 | 与链上状态同一批读，EVM 两轮 multicall / Tron 受限并发 | 读不到就不显示，不退回后端 |
 | 交易日志 | `GET /logs` + `/logs/daily` | 失败不阻断加载 |
 
-处理上的四条约定：
+处理上的五条约定：
+
+- operator 名单从**合约**读（`getOperators` 分页），不是配置里手填的那个。
+  合约没有这个方法就不显示这一块，不编一个空名单出来。
+  `isOperator` 单独问一次：名单是分页的，装不下时"不在列表里"不等于没权限
 
 - 余额读不到时**不写这个字段**，界面显示「—」。写成 0 会让运维以为那个地址
   没气了跑去充值；而真没气的时候又和「读不到」长得一样，反而没人当回事

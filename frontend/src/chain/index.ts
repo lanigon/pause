@@ -67,6 +67,13 @@ export async function discoverWallets(family: ChainFamily): Promise<readonly Wal
 export async function readStates(
   chains: readonly Chain[],
   contracts: readonly Contract[],
+  /**
+   * 各链族当前连着的钱包地址。传了就顺带问一句「它是不是这些合约的 operator」。
+   *
+   * 按链族分开是因为地址形态不同 —— EVM 是 0x…，Tron 是 T…，
+   * 拿 EVM 地址去 Tron 合约上问只会得到一个必然为 false 的答案。
+   */
+  viewers: Readonly<Record<string, string | null>> = {},
 ): Promise<Map<string, ContractState>> {
   const byChain = new Map<string, Contract[]>()
   for (const contract of contracts) {
@@ -81,7 +88,7 @@ export async function readStates(
       const reader = chain && familyOf(chain.type)?.readState
       if (!chain || !reader) return new Map<string, ContractState>()
       try {
-        return await reader(chain, group)
+        return await reader(chain, group, viewers[chain.type] ?? undefined)
       } catch {
         return new Map<string, ContractState>()
       }

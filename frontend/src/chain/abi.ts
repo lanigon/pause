@@ -32,6 +32,26 @@ const ENCODABLE: ReadonlySet<string> = new Set(
 export const canEncode = (method: string): boolean => ENCODABLE.has(method)
 
 /**
+ * 只读的权限查询。**和 PAUSABLE_ABI 分开**：
+ * canEncode 是从 PAUSABLE_ABI 推导的，用来拦「后端下发了前端编码不了的操作」。
+ * 把这两个 view 方法混进去，canEncode('getOperators') 会返回 true —— 那是错的，
+ * 它们不是可执行的操作，前端永远不该给它们发交易。
+ */
+export const OPERATORS_ABI = [
+  'function getOperators(uint256 offset, uint256 limit) view returns (address[])',
+  'function isOperator(address account) view returns (bool)',
+]
+
+/**
+ * 一次读回多少个 operator。
+ *
+ * 合约端是分页接口，没有总数可问，所以靠「返回条数是否等于 limit」判断有没有下一页。
+ * 取 50 是因为运维要看的是「谁能动这个合约」，几十个已经足够判断；
+ * 真有上百个 operator 的合约，界面上列全了也没人看得过来，标一句"还有更多"更有用。
+ */
+export const OPERATOR_PAGE = 50
+
+/**
  * 一个 32 字节的字里是不是干净的 0 或 1。
  *
  * 两个链族都要这道守卫：合约地址误配成预编译地址时，它对任意调用都返回哈希，
