@@ -6,9 +6,20 @@ import { AppError, ErrorCode } from '../lib/utils/errors.js'
 /** 能执行写操作的角色。viewer 只能看 */
 const canWrite = (role: OperatorRole): boolean => role === 'admin' || role === 'operator'
 
-declare module 'express-serve-static-core' {
-  interface Request {
-    operator?: AuthContext
+/**
+ * 把当前身份挂到 req 上。
+ *
+ * 用 `declare global` 增强 Express 的全局命名空间，而不是
+ * `declare module 'express-serve-static-core'` —— 后者依赖模块解析路径：
+ * npm 的扁平布局下只有一份 @types/express-serve-static-core 所以碰巧能用，
+ * pnpm 的严格布局下可能装着多份，增强会打在错的那份上，
+ * 表现是 `Property 'operator' does not exist on type 'Request'`。
+ */
+declare global {
+  namespace Express {
+    interface Request {
+      operator?: AuthContext
+    }
   }
 }
 

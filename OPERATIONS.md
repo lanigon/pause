@@ -13,7 +13,7 @@
 | 用途 | 需要什么 | 装法与验证 |
 |---|---|---|
 | 必需 | Node ≥ 20 | `node -v`。低于 20 起不来 |
-| 必需 | npm ≥ 9 或 pnpm ≥ 8 | `npm -v` |
+| 必需 | npm ≥ 9 或 pnpm ≥ 8 | `npm -v`。两个都实测过，见 §10 |
 | 必需 | 浏览器 EVM 钱包 | MetaMask / OKX / Rabby 任一。**登录只认 EVM 签名** |
 | 必需 | 白名单里的地址 | 你的地址要在 `backend/data/operators.json` 里 |
 | GPG 批量 | GnuPG | `brew install gnupg`，验 `gpg --version` |
@@ -203,10 +203,28 @@ secrets/evm.address    明文地址 —— 用来核对密钥有没有被换过,
 ## 10. 开发
 
 ```bash
-cd backend  && npm test          # 283 个用例
-cd frontend && npm test          # 72 个用例
+cd backend  && npm test          # 276 个用例
+cd frontend && npm test          # 78 个用例
 npm run typecheck                # 两边都有
 ```
+
+### npm 与 pnpm 都可以
+
+两个包管理器都实测过：typecheck、全部测试、build 三项在两边都通过。
+
+两点已知差异，不影响使用：
+
+- **仓库里只有 `package-lock.json`**。pnpm 没有 lockfile，每次 `pnpm install`
+  重新解析版本 —— 能装上，但不保证和别人装的完全一致。要复现就用 npm。
+- pnpm 10 默认拦截依赖的构建脚本，会警告 `Ignored build scripts: esbuild、vue-demi`。
+  实测无影响（esbuild 现在走平台预编译二进制），不用管，也可以跑
+  `pnpm approve-builds` 放行。
+
+> 有个坑是实测才发现的：`req.operator` 的类型增强原来写成
+> `declare module 'express-serve-static-core'`，在 npm 的扁平布局下只有一份
+> 类型包所以碰巧能用；pnpm 的严格布局下装了两份（4.x 与 5.x），
+> 增强打在错的那份上，typecheck 直接报 `Property 'operator' does not exist`。
+> 已改成 `declare global { namespace Express }`，两边都过。
 
 **v1 单实例**:运行中的任务与已用签名去重表存于内存,不支持水平扩展。
 交易日志落盘,重启不丢。生产用 HTTPS 并收紧 `CORS_ORIGINS`。
