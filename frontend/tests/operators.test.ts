@@ -233,7 +233,11 @@ describe('EVM：两轮读取与组装', () => {
       const actual = (await orig()) as Record<string, unknown>
       return {
         ...actual,
-        JsonRpcProvider: class {},
+        // destroy 是真会被调的 —— readEvm 每轮读完都销毁 provider，
+        // 不销毁的话切几次业务线就攒一堆
+        JsonRpcProvider: class {
+          destroy(): void {}
+        },
         Contract: class {
           aggregate3 = {
             staticCall: async (calls: { callData: string }[]) =>
@@ -319,5 +323,93 @@ describe('EVM：两轮读取与组装', () => {
 
     await readEvm(EVM, [evmContract('c1')])
     expect(seen).not.toContain(SEL.isOperator)
+  })
+
+  /**
+   * 换不换节点的判据是**这个 RPC 通不通**，不是**读到了几个值**。
+   *
+   * 拿"没读到值"当判据的话，一条链上的合约只要没有 paused()，
+   * 每次刷新都会把 2–4 个候选全空跑一遍 —— 而结果一模一样。
+   */
+  describe('什么时候该换节点', () => {
+    const MULTI: Chain = { ...EVM, rpcs: ['https://dead.invalid', 'https://alive.invalid'] }
+
+    /** multicall 整体抛错 = 节点不通；单点也全失败时才判定这个候选不可用 */
+    async function loadEvmPerUrl(behaviour: (url: string) => 'dead' | 'alive') {
+      vi.resetModules()
+      const urls: string[] = []
+      vi.doMock('ethers', async (orig) => {
+        const actual = (await orig()) as Record<string, unknown>
+        let current = ''
+        return {
+          ...actual,
+          JsonRpcProvider: class {
+            constructor(url: string) {
+              current = url
+              urls.push(url)
+            }
+            destroy(): void {}
+            async call(): Promise<string> {
+              if (behaviour(current) === 'dead') throw new Error('CORS')
+              return '0x'
+            }
+            async getBalance(): Promise<bigint> {
+              if (behaviour(current) === 'dead') throw new Error('CORS')
+              return 0n
+            }
+          },
+          Contract: class {
+            aggregate3 = {
+              staticCall: async () => {
+                throw new Error('这条链没部署 Multicall3')
+              },
+            }
+          },
+        }
+      })
+      const { readEvm } = await import('../src/chain/evm/read')
+      const { __resetRpcMemory } = await import('../src/chain/rpc')
+      __resetRpcMemory()
+      return { readEvm, urls }
+    }
+
+    it('★ 第一个节点不通 —— 换到第二个', async () => {
+      const { readEvm, urls } = await loadEvmPerUrl((url) =>
+        url.includes('dead') ? 'dead' : 'alive',
+      )
+      await readEvm(MULTI, [evmContract('c1')])
+      expect(urls).toEqual(['https://dead.invalid', 'https://alive.invalid'])
+    })
+
+    it('★ multicall 成功但每一项都失败 —— 那是合约没这个方法，不许换节点', async () => {
+      const urls: string[] = []
+      vi.resetModules()
+      vi.doMock('ethers', async (orig) => {
+        const actual = (await orig()) as Record<string, unknown>
+        return {
+          ...actual,
+          JsonRpcProvider: class {
+            constructor(url: string) {
+              urls.push(url)
+            }
+            destroy(): void {}
+          },
+          Contract: class {
+            // allowFailure：整批成功返回，但每一项都标着失败
+            aggregate3 = {
+              staticCall: async (calls: unknown[]) => calls.map(() => [false, '0x']),
+            }
+          },
+        }
+      })
+      const { readEvm } = await import('../src/chain/evm/read')
+      const { __resetRpcMemory } = await import('../src/chain/rpc')
+      __resetRpcMemory()
+
+      const states = await readEvm(MULTI, [evmContract('c1')])
+
+      expect(urls).toEqual(['https://dead.invalid'])
+      expect(states.get('c1')).toBeUndefined()
+    })
   })
 })

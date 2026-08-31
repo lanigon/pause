@@ -1,5 +1,6 @@
 import { Contract, Interface, JsonRpcProvider, formatUnits } from 'ethers'
 import { OPERATORS_ABI, OPERATOR_PAGE, PAUSABLE_ABI, isBoolWord } from '../abi'
+import { rpcFor } from '../rpc'
 import type { Chain, Contract as ContractDef, ContractState, OperatorInfo } from '../../types'
 
 /**
@@ -12,6 +13,8 @@ import type { Chain, Contract as ContractDef, ContractState, OperatorInfo } from
  *   第一轮  paused · getOperators · isOperator(viewer)
  *   第二轮  第一轮读回来的每个 operator 地址的原生币余额
  * 两轮各自还是一次 multicall，所以一条链最多两次 RPC 往返。
+ *
+ * 节点从 chain/rpc.ts 拿 —— 后端下发的候选列表，这一个挂了自动换下一个。
  */
 
 const MULTICALL3_ABI = [
@@ -56,14 +59,34 @@ export async function readEvm(
   contracts: readonly ContractDef[],
   viewer?: string,
 ): Promise<Map<string, ContractState>> {
-  const provider = new JsonRpcProvider(chain.rpcs[0], chain.chainId, { staticNetwork: true })
-
   const round1: Call[] = contracts.flatMap((contract): Call[] => [
     { kind: 'paused', id: contract.id, target: contract.address },
     { kind: 'operators', id: contract.id, target: contract.address },
     ...(viewer ? [{ kind: 'isOperator' as const, id: contract.id, target: contract.address, viewer }] : []),
   ])
 
+  /**
+   * 候选列表与降级顺序归 chain/rpc.ts 管（后端下发的那份，已按探活排过序）。
+   * 这里只负责：拿到一个 url，把两轮读跑完；跑不通就抛，让它换下一个。
+   */
+  return rpcFor(chain).use(async (url) => {
+    const provider = new JsonRpcProvider(url, chain.chainId, { staticNetwork: true })
+    try {
+      return await readWith(provider, chain, contracts, round1)
+    } finally {
+      // 不销毁的话每次刷新都留下一个 provider，切几次业务线就攒一堆
+      provider.destroy()
+    }
+  })
+}
+
+/** 两轮读共用同一个 provider —— 第二轮的入参来自第一轮，中途换节点没有意义 */
+async function readWith(
+  provider: JsonRpcProvider,
+  chain: Chain,
+  contracts: readonly ContractDef[],
+  round1: readonly Call[],
+): Promise<Map<string, ContractState>> {
   const first = await runCalls(provider, round1)
 
   /**
@@ -181,7 +204,13 @@ function absorb(call: Call, data: string, into: Reading): void {
   }
 }
 
-/** 一轮：优先 multicall，这条链没部署就退回并发单点 */
+/**
+  * 一轮：优先 multicall，这条链没部署就退回并发单点。
+  *
+  * **抛出去 = 这个节点不能用**（rpcFor().use 会换下一个）。
+  * multicall 成功返回就说明节点是通的，哪怕每一项都标着失败 ——
+  * 那是合约没有 paused()，换节点解决不了。
+  */
 async function runCalls(provider: JsonRpcProvider, calls: readonly Call[]): Promise<Reading> {
   if (calls.length === 0) return emptyReading()
   try {
@@ -207,20 +236,32 @@ async function viaMulticall(provider: JsonRpcProvider, calls: readonly Call[]): 
 
 async function oneByOne(provider: JsonRpcProvider, calls: readonly Call[]): Promise<Reading> {
   const into = emptyReading()
+  let answered = 0
   await Promise.all(
     calls.map(async (call) => {
       try {
         // 没有 Multicall3 的链上余额只能直接问节点，不能走 getEthBalance
         if (call.kind === 'balance') {
           into.balance.set(call.address.toLowerCase(), await provider.getBalance(call.address))
+          answered += 1
           return
         }
         const encoded = encodeCall(call)
         absorb(call, await provider.call({ to: encoded.target, data: encoded.callData }), into)
+        answered += 1
       } catch {
         /* 忽略单点失败 */
       }
     }),
   )
+
+  /**
+   * multicall 已经失败了，退回单点又一条都没回来 —— 判定这个节点不可用，
+   * 抛出去让 rpcFor().use 换下一个。
+   *
+   * 只在"一条都没回来"时抛：有一条回来了就说明节点是通的，
+   * 其余的失败是合约自己的事（没这个方法、revert），换节点一样的结果。
+   */
+  if (answered === 0) throw new Error('这个 RPC 一条都没读回来')
   return into
 }

@@ -2,8 +2,8 @@
 
 多链合约运维控制台。勾选合约，批量暂停 / 恢复。EVM 多链 + Tron。
 
-后端 Express + TypeScript（`src/` 58 文件），前端 Vue 3 + Element Plus（`src/` 24 文件）。
-测试 278 + 109，覆盖率 80%。
+后端 Express + TypeScript（`src/` 58 文件），前端 Vue 3 + Element Plus（`src/` 25 文件）。
+测试 278 + 119，覆盖率 80%。
 
 操作方式见 [OPERATIONS.md](OPERATIONS.md)。
 
@@ -293,6 +293,7 @@ store/     唯一 Pinia store，三块组合
            catalog    配置目录、链上状态、勾选、折叠
            execution  批量执行与进度事件
 chain/     evm/ 与 tron/ 各一套 read + wallet，index.ts 按链族分派
+           rpc.ts     每条链一个 RPC 结构体，两个链族共用
 ```
 
 三块之间不互相 import，跨块调用只在 `store/index.ts`。组件不直接调 api。
@@ -300,11 +301,17 @@ chain/     evm/ 与 tron/ 各一套 read + wallet，index.ts 按链族分派
 | 数据 | 获取方式 | 降级 |
 |---|---|---|
 | 配置 | `GET /registry/sync`（SSE，带同步进度） | 无。失败即抛出，用户点「重新同步」重试 |
-| 链上状态 | 前端 Multicall3 按链批量 | 无。读不到就显示「未知」，不退回后端 |
-| operator 名单与余额 | 与链上状态同一批读，EVM 两轮 multicall / Tron 受限并发 | 读不到就不显示，不退回后端 |
+| 链上状态 | 前端 Multicall3 按链批量 | 候选 RPC 挨个试；全挂了才显示「未知」，不退回后端 |
+| operator 名单与余额 | 与链上状态同一批读，EVM 两轮 multicall / Tron 受限并发 | 同上，读不到就不显示 |
 | 交易日志 | `GET /logs` + `/logs/daily` | 失败不阻断加载 |
 
 处理上的五条约定：
+
+- RPC 候选由后端下发（`publicUrlsFor`，只给公开的、已按探活排序），
+  前端在这份列表里做降级：挨个试，通了就记住，下次从它开始。
+  **换节点的判据是「这个 RPC 通不通」，不是「读到了几个值」** ——
+  合约没有 `paused()` 时 multicall 照样成功返回（allowFailure），
+  拿"没读到值"当判据会让每次刷新把所有候选空跑一遍，而结果一模一样
 
 - operator 名单从**合约**读（`getOperators` 分页），不是配置里手填的那个。
   合约没有这个方法就不显示这一块，不编一个空名单出来。

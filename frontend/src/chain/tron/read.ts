@@ -1,6 +1,7 @@
 import { AbiCoder } from 'ethers'
 import { OPERATOR_PAGE, isBoolWord } from '../abi'
 import { fromBase58, toBase58 } from './address'
+import { rpcFor } from '../rpc'
 import type { Chain, Contract as ContractDef, ContractState, OperatorInfo } from '../../types'
 
 /**
@@ -11,6 +12,9 @@ import type { Chain, Contract as ContractDef, ContractState, OperatorInfo } from
  *   带参数的 view 调用要自己 ABI 编码塞进 parameter 字段，selector 单独给
  *   余额走 wallet/getaccount，不是合约调用
  *   合约返回的地址是 hex20，显示和查余额都要转成 base58
+ *
+ * 节点从 chain/rpc.ts 拿 —— 和 EVM 共用同一份降级逻辑。
+ * 目前 Tron 只有一个候选（TronGrid），但接了这层之后再加就是改 data/rpc.json 的事。
  */
 const TRON_CONCURRENCY = 5
 
@@ -24,13 +28,27 @@ export async function readTron(
   contracts: readonly ContractDef[],
   viewer?: string,
 ): Promise<Map<string, ContractState>> {
-  const states = new Map<string, ContractState>()
-
-  // 没有 RPC 就直接返回：不加这道，下面会 fetch 到 "undefined/wallet/…"，
+  // 一个候选都没有时不去 fetch —— 否则会打到 "undefined/wallet/…"，
   // 变成对本站的一次 404，每个合约都白跑一趟
-  const base = chain.rpcs[0]
-  if (!base) return states
-  const host = base.replace(/\/$/, '')
+  if (chain.rpcs.length === 0) return new Map()
+
+  return rpcFor(chain).use((url) => readFrom(url.replace(/\/$/, ''), contracts, viewer))
+}
+
+/**
+ * 从某一个 host 读。
+ *
+ * **一条都没读回来就抛**，让 rpcFor().use 换下一个候选 ——
+ * 判据和 EVM 那边一致：有一条回来了就说明节点是通的，
+ * 其余读不到是合约自己的事（没有 getOperators、地址不对），换节点一样的结果。
+ */
+async function readFrom(
+  host: string,
+  contracts: readonly ContractDef[],
+  viewer?: string,
+): Promise<Map<string, ContractState>> {
+  const states = new Map<string, ContractState>()
+  let answered = 0
 
   // viewer 是钱包给的 base58，编进 ABI 要 hex20。转不了就不问 isOperator
   const viewerHex = viewer ? fromBase58(viewer) : undefined
@@ -38,11 +56,23 @@ export async function readTron(
   const operatorsOf = new Map<string, readonly string[]>()
 
   await inBatches(contracts, async (contract) => {
-    const [paused, operators, isOp] = await Promise.all([
+    /**
+     * 用 allSettled 不用 all：三个请求里有一个网络抖了，不该把另外两个
+     * 已经读到的结果一起丢掉。同时 fulfilled 的个数正好就是"HTTP 通了几次"，
+     * 拿它判断这个节点能不能用 —— 合约没这个方法也是 fulfilled（值为 undefined），
+     * 那不是节点的问题。
+     */
+    const [pausedR, operatorsR, isOpR] = await Promise.allSettled([
       readPaused(host, contract.address),
       readOperators(host, contract.address),
       viewerHex ? readIsOperator(host, contract.address, viewerHex) : Promise.resolve(undefined),
     ])
+    if ([pausedR, operatorsR, isOpR].some((r) => r.status === 'fulfilled')) answered += 1
+
+    const paused = pausedR.status === 'fulfilled' ? pausedR.value : undefined
+    const operators = operatorsR.status === 'fulfilled' ? operatorsR.value : undefined
+    const isOp = isOpR.status === 'fulfilled' ? isOpR.value : undefined
+
     const state: ContractState = {}
     if (paused !== undefined) state.paused = paused
     if (isOp !== undefined) state.viewerIsOperator = isOp
@@ -63,9 +93,13 @@ export async function readTron(
 
   const balances = new Map<string, string>()
   await inBatches([...addresses], async (address) => {
+    // 抛出去就是 HTTP 没通，由 inBatches 吞掉、不计数
     const trx = await readBalance(host, address)
+    answered += 1
     if (trx !== undefined) balances.set(address, trx)
   })
+
+  if (answered === 0 && contracts.length > 0) throw new Error('这个 TronGrid 一条都没读回来')
 
   // 摊回各合约。读不到就不写这个字段，界面显示"—"
   for (const contract of contracts) {
@@ -123,7 +157,9 @@ async function constantCall(
       visible: true,
     }),
   })
-  if (!res.ok) return undefined
+  // HTTP 没通 = 这个节点的问题，抛出去（fetch 自己失败时也是抛）；
+  // 通了但没有 constant_result = 合约没这个方法，那是合约的事，返回 undefined
+  if (!res.ok) throw new Error(`TronGrid HTTP ${res.status}`)
   const body = (await res.json()) as { constant_result?: string[] }
   return body.constant_result?.[0]
 }
@@ -172,7 +208,7 @@ async function readBalance(host: string, address: string): Promise<string | unde
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ address, visible: true }),
   })
-  if (!res.ok) return undefined
+  if (!res.ok) throw new Error(`TronGrid HTTP ${res.status}`)
 
   const body = (await res.json()) as { balance?: number }
   const sun = body.balance ?? 0

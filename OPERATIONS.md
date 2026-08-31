@@ -221,7 +221,7 @@ secrets/evm.address    明文地址 —— 用来核对密钥有没有被换过,
 ## 10. 开发
 
 ```bash
-npm test           # 两边一起跑：后端 278 + 前端 109
+npm test           # 两边一起跑：后端 278 + 前端 119
 npm run typecheck  # 两边一起
 npm run build      # 两边一起
 ```
