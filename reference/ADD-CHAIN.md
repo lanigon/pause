@@ -11,7 +11,7 @@
 
 ## 新的 EVM 链
 
-**零代码。** `backend/data/chains.json` 加一项，再跑一次 `npm run sync` 补 RPC：
+**零代码。** `backend/data/chains.json` 加一项，再跑一次 `npm run sync rpc` 补 RPC：
 
 ```json
 { "key": "base", "type": "evm", "chainId": 8453,
@@ -44,7 +44,7 @@ Multicall3 不用配 —— 它是确定性部署，几乎每条 EVM 链都在
 | 后端代码 | `scripts/sync.ts` | `probe` 与 `fetchChainlist` 各加一个分支 | 该链**一个可用 RPC 都拿不到**，且理由看起来像节点全挂了 |
 | 前端代码 | `src/chain/index.ts` | `FAMILY_LIST` 加一项 | ★ **不报错**，这条链在界面上静默变成一片空白 |
 | 配置 | `data/chains.json` | 加链定义 | 合约引用不到链，启动报错 |
-| 配置 | `data/rpc.json` | 手填 lark 段应急 | 同上，没有可用 RPC。且下次 `npm run sync` 会把手填的探活判死后删掉 |
+| 配置 | `data/rpc.json` | 手填 lark 段应急 | 同上，没有可用 RPC。且下次 `npm run sync rpc` 会把手填的探活判死后删掉 |
 | 配置 | `secrets/` | `<族>.key.gpg` + `<族>.address` | GPG 模式整批拒绝执行 |
 
 `scripts/check.ts` **不用改** —— 它按 `GpgKey.available()` 扫 `secrets/` 目录，
@@ -418,10 +418,12 @@ Solana 钱包（Phantom 等）导出的通常是 **64 字节的 base58 私钥**�
 
 ## 做完自查
 
+在仓库根跑，三条都是两边一起：
+
 ```bash
-cd backend  && npx tsc --noEmit && npx vitest run
-cd frontend && npx vue-tsc --noEmit && npx vitest run
-cd backend  && npm run check          # 环境、密钥、数据、RPC 一起过一遍
+npm run typecheck
+npm test
+npm run check          # 环境、密钥、数据、RPC 一起过一遍
 ```
 
 两个 `newFamily.test.ts` 专门锁那些「漏了不报错」的地方，要单独看它们过没过：

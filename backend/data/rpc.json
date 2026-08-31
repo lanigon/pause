@@ -1,5 +1,5 @@
 {
-  "syncedAt": "2026-08-31T07:25:52.201Z",
+  "syncedAt": "2026-08-31T07:31:38.381Z",
   "lark": {},
   "chainlist": {
     "morph": [
@@ -12,10 +12,10 @@
       "https://mainnet.gateway.tenderly.co"
     ],
     "bsc": [
-      "https://bsc-dataseed3.bnbchain.org",
+      "https://bsc-dataseed4.bnbchain.org",
       "https://bsc-dataseed2.bnbchain.org",
       "https://bsc-dataseed1.bnbchain.org",
-      "https://bsc-dataseed4.bnbchain.org"
+      "https://bsc-dataseed3.bnbchain.org"
     ],
     "tron": [
       "https://api.trongrid.io"

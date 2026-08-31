@@ -119,6 +119,7 @@ npm run dev:web    # 另开一个终端 → http://localhost:5173
 npm run keys encrypt    # 选链族 → 输私钥(隐藏输入) → 确认地址 → 设口令
 npm run keys verify     # 解密验证,并与声明地址比对
 npm run keys status     # 看状态,不解密、不消耗 PIN 次数
+npm run keys doctor     # 一条命令验完整条链路(插上 YubiKey 后想快速确认就用它)
 ```
 
 三个都要交互式终端 —— 私钥与口令只从 TTY 读，不能用管道或重定向喂进去。

@@ -6,6 +6,7 @@
  *   npm run keys encrypt   |  pnpm keys encrypt    加密私钥到固定文件
  *   npm run keys verify    |  pnpm keys verify     解密验证并比对 secrets/<链族>.address
  *   npm run keys status    |  pnpm keys status     查看密钥文件状态（不解密）
+ *   npm run keys doctor    |  pnpm keys doctor     一条命令验完整条链路
  *
  * 固定约定：secrets/evm.key.gpg · secrets/tron.key.gpg
  *

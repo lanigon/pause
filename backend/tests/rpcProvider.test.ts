@@ -100,7 +100,7 @@ describe('没有任何 RPC 时', () => {
   it('★ urlsFor 抛错并说清怎么补 —— 静默返回空会让上层拿着空列表去发交易', () => {
     const p = providerWith({ syncedAt: '', lark: {}, chainlist: {} })
     expect(() => p.urlsFor(chain())).toThrow(/没有可用的 RPC/)
-    expect(() => p.urlsFor(chain())).toThrow(/npm run sync/)
+    expect(() => p.urlsFor(chain())).toThrow(/npm run sync rpc/)
   })
 
   it('publicUrlsFor 返回空数组而不是抛 —— 前端没 RPC 只是退化到后端代读', () => {

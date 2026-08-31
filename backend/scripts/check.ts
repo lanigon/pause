@@ -75,7 +75,7 @@ async function checkRuntime(): Promise<void> {
     ['前端依赖', '../frontend/node_modules'],
   ] as const) {
     if (await exists(path)) report('ok', label, '已安装')
-    else report('fail', label, '没装', `在对应目录跑 npm install`)
+    else report('fail', label, '没装', '在仓库根跑 npm run setup（一次装两边）')
   }
 }
 
@@ -162,7 +162,7 @@ async function checkData(): Promise<void> {
   rpcProvider.load(await readRpcFile(), env.ALCHEMY_API_KEY)
   const syncedAt = rpcProvider.syncedAt
   if (!syncedAt) {
-    report('warn', 'RPC 数据', '从未同步过', 'npm run sync')
+    report('warn', 'RPC 数据', '从未同步过', 'npm run sync rpc')
   } else {
     const days = Math.floor((Date.now() - new Date(syncedAt).getTime()) / 86_400_000)
     const stale = days > 7
@@ -170,14 +170,14 @@ async function checkData(): Promise<void> {
       stale ? 'warn' : 'ok',
       'RPC 数据',
       `${syncedAt.slice(0, 10)} 同步（${days} 天前）`,
-      stale ? 'npm run sync 刷新一下' : undefined,
+      stale ? 'npm run sync rpc 刷新一下' : undefined,
     )
   }
 
   // 每条有合约的链至少要有一个能用的 RPC
   for (const chain of config.chains.filter((c) => used.size > 0 && config.contracts.some((ct) => ct.chain === c.key))) {
     const urls = rpcProvider.urlsFor(chain).length
-    if (urls === 0) report('fail', `${chain.key} RPC`, '一个都没有', 'npm run sync')
+    if (urls === 0) report('fail', `${chain.key} RPC`, '一个都没有', 'npm run sync rpc')
     else report('ok', `${chain.key} RPC`, `${urls} 个可用`)
   }
 }
@@ -193,7 +193,7 @@ async function checkLark(): Promise<void> {
     cli ? undefined : '装了才能从飞书拉数据：https://open.feishu.cn/document/tools/lark-cli',
   )
 
-  // MCP 是给对话式操作用的，不装也不影响 npm run sync
+  // MCP 是给对话式操作用的，不装也不影响 npm run sync contracts
   const mcp = await hasCommand('lark-mcp')
   report(mcp ? 'ok' : 'warn', 'lark MCP', mcp ? '已安装' : '未安装（不影响 sync）')
 
@@ -209,9 +209,9 @@ async function checkLark(): Promise<void> {
   report('ok', 'data/sync.json', larkUrl.slice(0, 60) + (larkUrl.length > 60 ? '…' : ''))
 
   if (cli) {
-    report('ok', '能否拉取数据', '可以 —— 跑 npm run sync 把飞书的合约清单同步到本地 data/')
+    report('ok', '能否拉取数据', '可以 —— 跑 npm run sync contracts 把飞书的合约清单同步到本地 data/')
   } else {
-    report('warn', '能否拉取数据', '不能 —— 缺 lark CLI', '先装 lark CLI 并登录，再 npm run sync')
+    report('warn', '能否拉取数据', '不能 —— 缺 lark CLI', '先装 lark CLI 并登录，再 npm run sync contracts')
   }
 }
 
@@ -228,7 +228,7 @@ async function checkServices(): Promise<void> {
     backend ? 'ok' : 'warn',
     '后端',
     backend ? `在跑 (:${env.PORT})` : `没在跑 (:${env.PORT})`,
-    backend ? undefined : 'npm run dev',
+    backend ? undefined : '在仓库根跑 npm run dev',
   )
 
   const frontend = await fetch('http://localhost:5173', { signal: AbortSignal.timeout(2_000) })
@@ -239,7 +239,7 @@ async function checkServices(): Promise<void> {
     frontend ? 'ok' : 'warn',
     '前端',
     frontend ? '在跑 (:5173)' : '没在跑 (:5173)',
-    frontend ? undefined : 'cd ../frontend && npm run dev',
+    frontend ? undefined : '在仓库根跑 npm run dev:web',
   )
 }
 

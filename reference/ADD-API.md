@@ -230,8 +230,10 @@ try {
 跑一遍：
 
 ```bash
-cd backend && npx tsc --noEmit && npx vitest run
+npm --prefix backend run typecheck && npm --prefix backend test
 ```
+
+改动只在后端时用上面这条；两边都动了就在仓库根跑 `npm run typecheck && npm test`。
 
 ---
 
