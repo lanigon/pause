@@ -11,9 +11,6 @@
  *   · **不在第一个错误停下**。全部跑完再汇总，一次看清所有问题。
  *   · **每条失败都说下一步做什么**，而不只是说"失败了"。
  */
-// 排查脚本的输出要干净：把库里的 INFO 日志压掉，只留我们自己打的
-process.env.LOG_LEVEL ??= 'silent'
-
 import { spawn } from 'node:child_process'
 import { stat } from 'node:fs/promises'
 import { env } from '../src/config/env.js'
@@ -21,6 +18,18 @@ import { loadRawConfig, readRpcFile, readSyncConfig } from '../src/repositories/
 import { hasCommand } from '../src/lib/lark/client.js'
 import { GpgKey, LOW_PIN_RETRIES, gpgBinary, gpgEnv, readCardStatus } from '../src/lib/keys/gpg.js'
 import { rpcProvider } from '../src/lib/rpc/rpcProvider.js'
+import { logger } from '../src/lib/utils/logger.js'
+
+/**
+ * 排查脚本的输出要干净：把库里的 INFO 日志压掉，只留我们自己打的。
+ * rpcProvider.load() 会打一行「RPC 来源已加载」，混在「服务」那一节里很碍眼。
+ *
+ * 直接改 logger.level，**不能走环境变量** —— 两条路都不通：
+ *   env.ts 的 LOG_LEVEL 是编译期常量，压根不读 process.env.LOG_LEVEL
+ *   就算它读，ESM 的 import 是提升的，模块体里的赋值语句排在 env.js 求值之后
+ * 早先这里写的是 `process.env.LOG_LEVEL ??= 'silent'`，两条都占，一直没生效。
+ */
+logger.level = 'silent'
 
 type Level = 'ok' | 'warn' | 'fail'
 
@@ -280,6 +289,16 @@ async function main(): Promise<void> {
     console.log(`\n${warned.length} 项建议处理（不影响启动）：`)
     for (const r of warned) console.log(`  ⚠ ${r.label}：${r.detail}${r.next ? `\n      → ${r.next}` : ''}`)
   }
+
+  /**
+   * 只有 ⚠ 的时候也要给一句结论。
+   *
+   * 这是「随手跑一下看看还差什么」的脚本，最后停在一串警告上、什么都不说，
+   * 人就得自己判断这些算不算拦路的 —— 而 lark 没装之类本来就不影响启动。
+   * 有 ✗ 才是真的不能开工，那种情况下面会退出码 1。
+   */
+  if (failed.length === 0) console.log('\n没有阻塞项，可以开工。上面这些不影响启动。')
+
   console.log()
   if (failed.length > 0) process.exitCode = 1
 }

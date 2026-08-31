@@ -30,12 +30,21 @@
 
 ## 2. 装依赖，然后让脚本告诉你还差什么
 
+**在仓库根目录跑**，四条：
+
 ```bash
-cd backend && npm install
-cp .env.example .env      # 三个变量都可以不填，见 §7
-npm run sync              # 拉 RPC（ChainList 公开数据，无需凭证）
-npm run check             # ← 这一步告诉你还差什么
+npm run setup                          # 装前后端两边的依赖
+cp backend/.env.example backend/.env   # 三个变量都可以不填，见 §7
+npm run sync rpc                       # 拉 RPC（ChainList 公开数据，无需凭证）
+npm run check                          # ← 这一步告诉你还差什么
 ```
+
+根目录的 `package.json` 只做转发（`npm --prefix backend run …`），没有 workspaces
+也没有依赖 —— 前后端各自的 `install` 布局不受影响。想在子目录里跑也一样：
+`cd backend && npm run check`。
+
+`sync` 后面那个 `rpc` **不能省** —— 不带子命令只会打印用法，什么都不做，
+而且退出码是 0，看起来像成功了。
 
 `npm run check` 按五组跑一遍，**不在第一个错误停下**，全部跑完再汇总：
 
@@ -43,7 +52,7 @@ npm run check             # ← 这一步告诉你还差什么
 |---|---|
 | 运行环境 | Node 版本、前后端两边的 `node_modules` 装没装 |
 | GPG 与运维密钥 | gpg 可执行、`GNUPGHOME`、YubiKey 在不在、密钥文件与权限、声明地址、解锁方式 |
-| 数据 | `data/` 五个文件能否通过校验、每条链有几个可用 RPC |
+| 数据 | `data/` 下的配置能否通过校验、**每条有合约的链**有几个可用 RPC（没有合约的链不查） |
 | 飞书 | lark CLI 装没装、`data/sync.json` 配没配、能不能拉到数据 |
 | 服务 | 后端起没起、前端起没起 |
 
@@ -58,7 +67,8 @@ npm run check             # ← 这一步告诉你还差什么
       → 不装就只用本地 data/
 ```
 
-全部通过会打印「可以开工」。有 `✗` 时进程退出码是 1，能直接接进 CI。
+没有 `✗` 就会给一句结论 —— 全绿是「全部通过，可以开工」，只剩 ⚠ 是
+「没有阻塞项，可以开工」。有 `✗` 时退出码是 1，能直接接进 CI。
 
 它**不解密、不碰 YubiKey**，所以随手跑不会消耗 PIN 尝试次数。
 要验密钥能不能真的解开，用 `npm run keys verify`。
@@ -68,8 +78,8 @@ npm run check             # ← 这一步告诉你还差什么
 ## 3. 起服务
 
 ```bash
-cd backend  && npm run dev    # → http://localhost:8787
-cd frontend && npm install && npm run dev   # 另开终端 → http://localhost:5173
+npm run dev        # 后端 → http://localhost:8787
+npm run dev:web    # 另开一个终端 → http://localhost:5173
 ```
 
 浏览器打开 5173，点顶栏 **EVM** 连钱包并签名登录。
@@ -106,11 +116,12 @@ cd frontend && npm install && npm run dev   # 另开终端 → http://localhost:
 ## 5. 配置密钥(只有用 GPG 模式才需要)
 
 ```bash
-cd backend
 npm run keys encrypt    # 选链族 → 输私钥(隐藏输入) → 确认地址 → 设口令
 npm run keys verify     # 解密验证,并与声明地址比对
 npm run keys status     # 看状态,不解密、不消耗 PIN 次数
 ```
+
+三个都要交互式终端 —— 私钥与口令只从 TTY 读，不能用管道或重定向喂进去。
 
 生成两个文件,按链族约定放在 `secrets/`:
 
@@ -209,10 +220,13 @@ secrets/evm.address    明文地址 —— 用来核对密钥有没有被换过,
 ## 10. 开发
 
 ```bash
-cd backend  && npm test          # 278 个用例
-cd frontend && npm test          # 109 个用例
-npm run typecheck                # 两边都有
+npm test           # 两边一起跑：后端 278 + 前端 109
+npm run typecheck  # 两边一起
+npm run build      # 两边一起
 ```
+
+只想跑一边就进对应目录：`cd backend && npm test`。
+后端另有 `npm run test:cov`（当前 80.84%）。
 
 ### npm 与 pnpm 都可以
 

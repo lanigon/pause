@@ -13,6 +13,7 @@
 
 ```
 operator/
+├── package.json         只做命令转发，没有 workspaces 也没有依赖
 ├── OPERATIONS.md        操作手册
 ├── ARCHITECTURE.md      本文
 ├── reference/           改代码时看：ADD-CHAIN 接新链 · ADD-API 加接口

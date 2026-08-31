@@ -1,0 +1,20 @@
+{
+  "name": "operator",
+  "version": "0.1.0",
+  "private": true,
+  "description": "多链合约运维控制台。真正的两个包在 backend/ 与 frontend/，这里只做命令转发 —— 没有 workspaces、没有依赖，不影响两个子项目各自的 install 布局",
+  "scripts": {
+    "check": "npm --prefix backend run check",
+    "sync": "npm --prefix backend run sync",
+    "keys": "npm --prefix backend run keys",
+    "dev": "npm --prefix backend run dev",
+    "dev:web": "npm --prefix frontend run dev",
+    "setup": "npm --prefix backend install && npm --prefix frontend install",
+    "test": "npm --prefix backend test && npm --prefix frontend test",
+    "typecheck": "npm --prefix backend run typecheck && npm --prefix frontend run typecheck",
+    "build": "npm --prefix backend run build && npm --prefix frontend run build"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
