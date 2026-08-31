@@ -70,12 +70,61 @@ async function checkRuntime(): Promise<void> {
   if (major >= 20) report('ok', 'Node 版本', process.versions.node)
   else report('fail', 'Node 版本', `${process.versions.node} 过低`, '需要 Node 20 以上')
 
+  await checkNpm()
+
   for (const [label, path] of [
     ['后端依赖', './node_modules'],
     ['前端依赖', '../frontend/node_modules'],
   ] as const) {
     if (await exists(path)) report('ok', label, '已安装')
     else report('fail', label, '没装', '在仓库根跑 npm run setup（一次装两边）')
+  }
+}
+
+/**
+ * 缓存目录被同步盘接管的特征路径。
+ *
+ * 这是 `npm warn tar TAR_ENTRY_INVALID checksum failure` 最常见的成因：
+ * 同步客户端会在 npm 写到一半时去改文件，解压时 tar 头的校验位就对不上了。
+ * 它只是 warn，安装照样"成功"，但**被跳过的文件是真没落盘** ——
+ * 之后在某个莫名其妙的地方报 Cannot find module。
+ *
+ * Mac 上把家目录交给 iCloud 的人很多，而 npm 缓存默认就在 ~/.npm。
+ */
+const SYNCED_DIR = /Mobile Documents|iCloud|Dropbox|OneDrive|Google Drive|pCloud|Sync\.com|Nextcloud/i
+
+/**
+ * npm 自己的状态。
+ *
+ * 放在排查里是因为它出问题的表现极具误导性：装依赖时刷一屏 checksum failure，
+ * 但退出码是 0，看起来一切正常。等真跑起来才发现某个包缺文件。
+ */
+async function checkNpm(): Promise<void> {
+  const version = (await run('npm', ['-v'], 5_000, process.env).catch(() => null))?.trim()
+  if (!version) {
+    return report('warn', 'npm', '问不出版本', 'npm 不在 PATH 里？装依赖会用到')
+  }
+
+  // lockfileVersion 3 要 npm 7+，package.json 的 engines 写的是 9+
+  const npmMajor = Number(version.split('.')[0])
+  if (npmMajor >= 9) report('ok', 'npm 版本', version)
+  else {
+    report('fail', 'npm 版本', `${version} 过低`, '本仓库 engines 要求 npm >= 9（lockfileVersion 3）')
+  }
+
+  const cache = (await run('npm', ['config', 'get', 'cache'], 5_000, process.env).catch(() => null))?.trim()
+  if (!cache) return report('warn', 'npm 缓存', '问不出位置')
+
+  if (SYNCED_DIR.test(cache)) {
+    report(
+      'fail',
+      'npm 缓存',
+      `在同步盘里：${cache}`,
+      '同步客户端会写坏缓存（装依赖时刷一屏 tar checksum failure）。' +
+        '换到本地路径：npm config set cache ~/.npm-cache --global',
+    )
+  } else {
+    report('ok', 'npm 缓存', cache)
   }
 }
 
@@ -245,9 +294,22 @@ async function checkServices(): Promise<void> {
 
 /* ══ 跑 ══════════════════════════════════════════════════════════════ */
 
-function run(command: string, args: readonly string[], timeoutMs: number): Promise<string> {
+/**
+ * 跑一条命令拿 stdout。
+ *
+ * env 默认是 gpgEnv() —— 给 gpg 用的那份精简环境（只留 PATH / HOME / LC_ALL /
+ * GNUPGHOME）。查 npm 配置时**必须传完整的 process.env**：npm 认
+ * `npm_config_*` 这类环境变量，剥掉了就会把用户自定义的缓存路径
+ * 报成默认值，而那正是最需要查准的一项。
+ */
+function run(
+  command: string,
+  args: readonly string[],
+  timeoutMs: number,
+  env: NodeJS.ProcessEnv = gpgEnv(),
+): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], env: gpgEnv() })
+    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], env })
     let out = ''
     child.stdout.on('data', (chunk: Buffer) => (out += chunk.toString('utf8')))
     const timer = setTimeout(() => {
