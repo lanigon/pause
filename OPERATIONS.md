@@ -2,7 +2,8 @@
 
 多链合约运维控制台。勾选合约,批量暂停 / 恢复。EVM 多链 + Tron。
 
-> 深入了解设计见 [ARCHITECTURE.md](ARCHITECTURE.md)。接口逐条与更细的参考在本地 `docs/`（不入库）。
+> 深入了解设计见 [ARCHITECTURE.md](ARCHITECTURE.md)。改代码看 `reference/`，
+> 接口逐条与更细的参考在本地 `docs/`（不入库）。
 
 ---
 
@@ -148,7 +149,8 @@ secrets/evm.address    明文地址 —— 用来核对密钥有没有被换过,
 **引用了不存在的链或业务线会在启动时直接报错**,服务起不来 —— 不会等到点下去才发现。
 
 加**新链族**(Solana 等)要写代码 —— 实现一个 `ChainAdapter` + 在 `lib/web3/chains.ts` 注册一行,
-本地 `docs/ADD-CHAIN.md` 有分步说明。
+另有五处要跟着改。[reference/ADD-CHAIN.md](reference/ADD-CHAIN.md) 有分步说明,
+其中密钥 CLI 和前端注册表那两处**漏了不报错**。
 
 ---
 
@@ -207,8 +209,8 @@ secrets/evm.address    明文地址 —— 用来核对密钥有没有被换过,
 ## 10. 开发
 
 ```bash
-cd backend  && npm test          # 276 个用例
-cd frontend && npm test          # 78 个用例
+cd backend  && npm test          # 278 个用例
+cd frontend && npm test          # 109 个用例
 npm run typecheck                # 两边都有
 ```
 

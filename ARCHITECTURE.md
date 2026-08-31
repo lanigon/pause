@@ -2,8 +2,8 @@
 
 多链合约运维控制台。勾选合约，批量暂停 / 恢复。EVM 多链 + Tron。
 
-后端 Express + TypeScript（`src/` 58 文件），前端 Vue 3 + Element Plus（`src/` 23 文件）。
-测试 276 + 78，覆盖率 80%。
+后端 Express + TypeScript（`src/` 58 文件），前端 Vue 3 + Element Plus（`src/` 24 文件）。
+测试 278 + 109，覆盖率 80%。
 
 操作方式见 [OPERATIONS.md](OPERATIONS.md)。
 
@@ -15,6 +15,7 @@
 operator/
 ├── OPERATIONS.md        操作手册
 ├── ARCHITECTURE.md      本文
+├── reference/           改代码时看：ADD-CHAIN 接新链 · ADD-API 加接口
 ├── backend/
 │   ├── data/            全部配置 JSON：chains · contracts · operators · rpc · sync
 │   ├── secrets/         <链族>.key.gpg + <链族>.address，不入库
@@ -44,7 +45,8 @@ operator/
     └── labels.ts        执行阶段中文名
 ```
 
-`docs/` 下另有四份细节文档（架构手册 / 接口逐条 / 前端结构 / 接新链），不入库。
+`reference/` 是改代码时的两份指南，入库。
+`docs/` 下另有三份细节文档（架构手册 / 接口逐条 / 前端结构），跟着代码走得快，不入库。
 
 ---
 
@@ -52,7 +54,7 @@ operator/
 
 ```
 routes/          path → controller
-controllers/     HTTP：ETag、SSE 帧、状态码、参数解析          4 个
+controllers/     HTTP：SSE 帧、状态码、参数解析                4 个
 services/        编排：把 core 能力按接口需要串起来            4 个
 core/            领域能力：知道业务，不知道 HTTP               6 个
 lib/             通用能力：不知道这是个合约管理平台
@@ -82,14 +84,14 @@ lib/  → core/ / services/ / controllers/     0 处
 |---|---|
 | `config` | `server.ts` 启动即用，另有 3 个 service |
 | `identity` | 主要消费者是中间件（每请求验 JWT） |
-| `contractState` | `/states` 与执行前置检查共用 |
+| `contractState` | 消费者是 `core/execution` —— 与写编排分文件，因为读失败和写失败代价差一个量级 |
 | `sync` | `registry.service` 与 `scripts/sync.ts` 都用 |
 
 ---
 
 ## 3. 功能模块
 
-系统交付 8 项能力。分工原则：链上读由前端做、后端兜底；链上写看私钥在谁手里；
+系统交付 8 项能力。分工原则：界面上的链上读全由前端做；链上写看私钥在谁手里；
 配置与审计后端是唯一真相源，前端只渲染。
 
 | 功能 | 前端负责 | 后端负责 | 实现位置 |
@@ -97,7 +99,7 @@ lib/  → core/ / services/ / controllers/     0 处
 | 身份与权限 | 连钱包、拼挑战消息、签名、token 存内存 | 验签、查白名单、发 JWT、角色拦截 | `core/identity` · `services/auth` · `middlewares/auth` |
 | 配置管理 | 渲染业务线与合约、勾选、折叠 | 加载、跨文件校验、建索引、预算 DTO | `core/config` · `services/registry` |
 | 数据同步 | 展示同步进度 | 拉飞书表格、与本地比对、有差异才写盘 | `core/sync` · `lib/lark` |
-| 状态监控 | Multicall3 自读，主路径 | 兜底代读，按链批量 | `chain/*/read` · `core/contractState` |
+| 状态监控 | Multicall3 按链批量自读，读不到显示「未知」 | 执行前自读一次，已达目标状态的跳过 | `chain/*/read` · `core/contractState` |
 | 权限与余额 | 读合约的 `getOperators` / `isOperator`，再查每个 operator 的主链币余额 | 只下发合约地址 | `chain/*/read` |
 | 批量执行·钱包 | 切链、逐笔签名、广播 | 只收一条日志 | `chain/*/wallet` |
 | 批量执行·GPG | 发一个请求、渲染进度流 | 解密、预演、签名、广播、确认 | `core/execution` · `services/gpg` · `lib/keys` |
@@ -119,7 +121,7 @@ flowchart TB
     LARK["飞书表格"] -->|core/sync 拉取 → 比对| DATA[("data/*.json")]
     EDIT["本地编辑"] --> DATA
     DATA -->|core/config 跨文件引用校验| DTO["DTO 内存预算"]
-    DTO -->|"GET /registry"| UI["前端渲染"]
+    DTO -->|"GET /registry/sync"| UI["前端渲染"]
     DATA -.校验不过.-> STOP["服务起不来"]
 ```
 
@@ -132,12 +134,11 @@ flowchart LR
     CHAIN[("链上")]
     LOG[("operations.json")]
 
-    UI -->|"两轮 Multicall3：先 paused+名单，再按名单查余额"| CHAIN
-    UI -->|"GET /states 兜底"| BE
-    BE -->|"按链批量 eth_call"| CHAIN
+    UI -->|"两轮 Multicall3：先 paused + 名单 + isOperator，再按名单查余额"| CHAIN
 
     UI -->|"钱包模式：自己签自己发"| CHAIN
     UI -->|"GPG 模式：POST /gpg/batch"| BE
+    BE -->|"执行前读一次 paused，已达目标的跳过"| CHAIN
     BE -->|"gpg-agent 解密 → 签名 → 广播"| CHAIN
     BE -->|"SSE 进度事件"| UI
 
@@ -146,8 +147,9 @@ flowchart LR
     BE --> LOG
 ```
 
-链上状态默认由前端读，不占后端 RPC 配额，切业务线时刷新更快。
-公开 RPC 常无 CORS 头会被浏览器拦截，此时退回 `GET /states`。
+界面上的链上状态全部由前端读，后端不代读 —— 不占后端 RPC 配额，切业务线时刷新更快。
+读不到就显示「未知」，快捷勾选也不会勾它。后端只在执行前自己读一次，
+那是为了跳过已经处于目标状态的合约，不是给界面用的。
 
 ---
 
@@ -227,14 +229,13 @@ sequenceDiagram
 
 ## 6. 接口
 
-9 个。响应统一 `{ success, data, error }`。除公开的两个外全部需要 JWT。
+8 个。响应统一 `{ success, data, error }`。除公开的两个外全部需要 JWT。
 
 | 分组 | 接口 | 说明 |
 |---|---|---|
 | 公开 | `GET /health` | 存活探针。`npm run check` 与部署探针在用 |
 | 公开 | `POST /auth/login` | 钱包签名登录，唯一发 token 的接口 |
 | 配置 | `GET /registry/sync` | SSE。取数的唯一入口，`?force=1` 顺带重载本地配置 |
-| 链上 | `GET /states` | 状态兜底。前端 multicall 被 CORS 拦时走这条 |
 | 执行 | `POST /gpg/batch` | SSE。响应体即执行进度流 |
 | 执行 | `POST /gpg/cancel` | 按操作者地址取消，不是按连接 |
 | 审计 | `GET /logs` | 交易日志，倒序分页 + 时间窗 |
@@ -245,11 +246,13 @@ sequenceDiagram
 过程中的每一步（拉取 / 比对 / 应用）都是事件，所以不需要另一个接口去问「现在什么情况」。
 `?force=1` 同时承担重载：手改 `data/*.json` 后点「重新同步」即可生效。
 
-原来还有 `GET /registry`（纯内存降级）与 `POST /registry/reload`（admin 热重载），
-都已并入。前者只在 SSE 断流时用，而这是个跑在 localhost 的工具，中间没有会掐长连接的代理；
-后者零调用方，它的职责被 `?force=1` 覆盖了。
+删掉过三个接口，都不是精简为了精简，而是实测下来没有调用方：
 
-`states` 读的是链上而非配置，合并会让配置接口变慢且不可缓存，所以留着。
+| 删掉的 | 原职责 | 为什么不需要 |
+|---|---|---|
+| `GET /registry` | SSE 断流时的纯内存降级 | 跑在 localhost，中间没有会掐长连接的代理 |
+| `POST /registry/reload` | admin 热重载 | 零调用方，职责被 `?force=1` 覆盖 |
+| `GET /states` | 前端 multicall 被 CORS 拦时的代读兜底 | 判定是整体性的（有一个合约读到就算读到），只要有一条链能读就永远不触发；而真触发时后端在那几条链上同样读不到 |
 
 ---
 
@@ -296,7 +299,7 @@ chain/     evm/ 与 tron/ 各一套 read + wallet，index.ts 按链族分派
 | 数据 | 获取方式 | 降级 |
 |---|---|---|
 | 配置 | `GET /registry/sync`（SSE，带同步进度） | 无。失败即抛出，用户点「重新同步」重试 |
-| 链上状态 | 前端 Multicall3 按链批量 | `GET /states` 后端代读 |
+| 链上状态 | 前端 Multicall3 按链批量 | 无。读不到就显示「未知」，不退回后端 |
 | operator 名单与余额 | 与链上状态同一批读，EVM 两轮 multicall / Tron 受限并发 | 读不到就不显示，不退回后端 |
 | 交易日志 | `GET /logs` + `/logs/daily` | 失败不阻断加载 |
 
@@ -305,6 +308,11 @@ chain/     evm/ 与 tron/ 各一套 read + wallet，index.ts 按链族分派
 - operator 名单从**合约**读（`getOperators` 分页），不是配置里手填的那个。
   合约没有这个方法就不显示这一块，不编一个空名单出来。
   `isOperator` 单独问一次：名单是分页的，装不下时"不在列表里"不等于没权限
+
+- 问 `isOperator` 要有个主语，所以读状态时必须带上**当前连着的钱包地址**。
+  不带的话那条 call 根本不会发出，界面上「你不是这个合约的 operator」
+  就永远提示不出来 —— 看起来像检查过了没问题，实际是钱包模式下必然失败的一批。
+  Tron 钱包连上后也要重读一次：它不参与登录，不会顺带触发加载
 
 - 余额读不到时**不写这个字段**，界面显示「—」。写成 0 会让运维以为那个地址
   没气了跑去充值；而真没气的时候又和「读不到」长得一样，反而没人当回事
