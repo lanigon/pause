@@ -1,8 +1,6 @@
 import type { Request, Response } from 'express'
-import { z } from 'zod'
 import * as registryService from '../services/registry.service.js'
 import type { SyncEvent } from '../core/sync.js'
-import { validated } from '../middlewares/validate.middleware.js'
 import { ok } from '../lib/utils/response.js'
 import { openSse } from '../lib/utils/sse.js'
 
@@ -30,20 +28,6 @@ export async function getRegistryStream(req: Request, res: Response): Promise<vo
   }
 }
 
-export const statesQuerySchema = z.object({
-  businessLine: z.string().optional(),
-  ids: z.string().optional(),
-})
-
-/**
- * 读链上状态。
- * 前端平时自己用 multicall 读（省后端 RPC 配额），这个接口是兜底：
- * 前端没有可用 RPC、或需要一个权威快照时用。
- */
-export async function getStates(req: Request, res: Response): Promise<void> {
-  const query = validated<z.infer<typeof statesQuerySchema>>(req)
-  ok(res, Object.fromEntries(await registryService.states(query)))
-}
 
 /* ══ 系统状态 ══════════════════════════════════════════════════════════ */
 

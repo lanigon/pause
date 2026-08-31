@@ -10,13 +10,11 @@ import type { Registry } from '../src/types'
  */
 const syncRegistry = vi.fn()
 const getLogs = vi.fn(async () => ({ items: [] }))
-const getStates = vi.fn(async () => ({}))
 const readStates = vi.fn(async () => new Map())
 
 vi.mock('../src/store/api', () => ({
   syncRegistry: (...args: unknown[]) => syncRegistry(...args),
   getLogs: () => getLogs(),
-  getStates: (...args: unknown[]) => getStates(...args),
   setToken: vi.fn(),
   login: vi.fn(),
   randomNonce: () => 'n',
@@ -257,25 +255,18 @@ describe('次要数据不拖垮启动', () => {
 })
 
 describe('链上状态', () => {
-  it('multicall 一个都没读到时退回后端代读', async () => {
-    // 公开 RPC 常常不带 CORS 头，浏览器会直接拦掉
-    readStates.mockResolvedValue(new Map([['a', {}]]) as never)
-    getStates.mockResolvedValue({ a: { paused: true } } as never)
 
-    const s = await store()
-    await s.bootstrap()
-
-    expect(getStates).toHaveBeenCalled()
-    expect(s.states.get('a')?.paused).toBe(true)
-  })
-
-  it('读到值时不打后端，省 RPC 配额', async () => {
+  it('★ 读不到就是"未知"，不再有后端兜底 —— 那条兜底实测从未触发过', async () => {
+    // 判定曾经是整体性的（有一个合约读到就算读到），所以只要有一条链能读，
+    // 其余链读不到也永远不会走兜底。而真走到时后端在那几条链上同样读不到。
     readStates.mockResolvedValue(new Map([['a', { paused: false }]]) as never)
 
     const s = await store()
     await s.bootstrap()
 
-    expect(getStates).not.toHaveBeenCalled()
+    expect(s.states.get('a')?.paused).toBe(false)
+    // b、c 读不到 → 没有条目 → 界面显示"未知"，快捷勾选也不会勾它们
+    expect(s.states.get('b')?.paused).toBeUndefined()
   })
 })
 

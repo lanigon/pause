@@ -24,7 +24,6 @@ vi.mock('../src/store/api', () => ({
   syncRegistry: vi.fn(async () => ({ ...REGISTRY, synced: { changed: false, fromLark: true } })),
   getRegistry: vi.fn(async () => REGISTRY),
   getLogs: vi.fn(async () => ({ items: [] })),
-  getStates: vi.fn(async () => ({})),
   setToken: vi.fn(),
   login: vi.fn(async () => ({
     accessToken: 't',

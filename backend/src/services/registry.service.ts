@@ -1,10 +1,9 @@
 import { dto } from '../core/config.js'
-import { readBusinessLineStates, readStates, type ContractState } from '../core/contractState.js'
 import { SyncPhase, syncFromLark, type SyncEvent, type SyncResult } from '../core/sync.js'
-import { AppError, ErrorCode, messageOf } from '../lib/utils/errors.js'
+import { messageOf } from '../lib/utils/errors.js'
 
 /**
- * 服务于 registry.controller 的六个接口。
+ * 服务于 registry.controller。
  *
  * 这一层只做**编排**：把 core/ 里的能力按接口的需要串起来。
  * 配置本身的真相在 core/config.ts，同步在 core/sync.ts，读链上状态在
@@ -43,17 +42,6 @@ export async function syncAndSnapshot(
 /**
  * GET /states —— 读链上状态。二选一：整条业务线，或指定一批合约 id。
  * 前端平时自己 multicall，这个接口是它没有可用 RPC 时的兜底。
- */
-export function states(query: {
-  businessLine?: string
-  ids?: string
-}): Promise<ReadonlyMap<string, ContractState>> {
-  if (query.businessLine) return readBusinessLineStates(query.businessLine)
-
-  const ids = query.ids?.split(',').map((s) => s.trim()).filter(Boolean) ?? []
-  if (ids.length === 0) throw new AppError(ErrorCode.BAD_REQUEST, '需要 businessLine 或 ids 参数')
-  return readStates(ids)
-}
 
 /* ══ 系统状态 ══════════════════════════════════════════════════════════ */
 

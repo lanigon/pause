@@ -122,7 +122,6 @@ npx tsc --noEmit && npx vitest run
 | GET | `/health` | `npm run check` 探活。**无需认证** |
 | POST | `/auth/login` | 前端登录（EVM 签名换 JWT） |
 | GET | `/registry/sync` | 前端启动加载。SSE，带 Lark 同步进度 |
-| GET | `/states` | 前端 multicall 读不到时兜底 |
 | POST | `/gpg/batch` | 前端执行批量操作。SSE |
 | POST | `/gpg/cancel` | 前端取消 |
 | GET | `/logs` | 交易日志（按天） |

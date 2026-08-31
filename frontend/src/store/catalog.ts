@@ -233,28 +233,23 @@ export function useCatalog(session: Session) {
 
   /**
    * 刷新链上状态。
-   * 先自己 multicall（省后端 RPC 配额、也更快）；
-   * 一个都没读到就退回后端的 /states —— 公开 RPC 常常不带 CORS 头，
-   * 浏览器会直接拦掉，这时候只能让后端代读。
+   * 前端自己 multicall 读，读不到的合约状态就是"未知"。
+   *
+   * 曾经有一条"一个都没读到就退回后端 /states"的兜底，删掉了：
+   * 判定是整体性的（只要有一个合约读到就算读到），所以但凡有一条链能读，
+   * 其余链读不到也永远不会触发 —— 实测一次都没跑起来过。
+   * 而真触发时后端在那几条链上同样读不到，救不了任何东西。
+   *
+   * 读不到就显示"未知"，快捷勾选也不会勾它 —— 不确定的事不替用户做决定。
    */
   async function refreshStates(): Promise<void> {
     const reg = registry.value
     if (!reg) return
 
-    let next = new Map<string, ContractState>()
-    try {
-      next = await readStates(reg.chains, reg.contracts)
-    } catch {
-      /* 整体失败也走兜底 */
-    }
-
-    // 判断依据是"有没有真读到值"，不是 Map 有没有条目 ——
-    // RPC 被 CORS 拦掉时也可能返回一堆空对象
-    const gotAnything = [...next.values()].some((s) => s.paused !== undefined)
-    if (!gotAnything && reg.contracts.length > 0) {
-      const fallback = await api.getStates(reg.contracts.map((c) => c.id))
-      next = new Map(Object.entries(fallback))
-    }
+    // 整体失败也不抛：某条链挂了不该让其余链的状态一起消失
+    const next = await readStates(reg.chains, reg.contracts).catch(
+      () => new Map<string, ContractState>(),
+    )
 
     // 保留执行中的临时状态（pending/hash），只覆盖链上读到的字段
     const merged = new Map(states.value)

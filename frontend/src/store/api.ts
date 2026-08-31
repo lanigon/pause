@@ -88,11 +88,6 @@ export const login = (address: string, timestamp: number, nonce: string, signatu
  * 后端兜底的链上状态。
  * 前端平时自己 multicall（省后端 RPC 配额），但公开 RPC 很多不带 CORS 头，
  * 浏览器会直接拦掉 —— 那种情况下退回来用这个。
- */
-export const getStates = (contractIds: string[]) =>
-  request<Record<string, { paused?: boolean }>>(
-    `/states?ids=${encodeURIComponent(contractIds.join(','))}`,
-  )
 
 /* ── 交易日志 ── */
 

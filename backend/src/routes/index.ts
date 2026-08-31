@@ -27,7 +27,6 @@ router.use(requireAuth)
 
 // 带 Lark 同步的加载：响应是 SSE，先同步再给数据。?force=1 跳过节流
 router.get('/registry/sync', asyncHandler(registry.getRegistryStream))
-router.get('/states', validateQuery(registry.statesQuerySchema), asyncHandler(registry.getStates))
 
 // GPG 批量执行：一个接口，响应是 SSE 流。密钥由后端本地处理，前端不传
 router.post('/gpg/batch', requireWriteRole, validateBody(gpg.batchSchema), asyncHandler(gpg.postBatch))

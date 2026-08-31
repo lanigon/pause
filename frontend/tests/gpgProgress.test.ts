@@ -17,7 +17,6 @@ vi.mock('../src/store/api', () => ({
   syncRegistry: vi.fn(),
   getRegistry: vi.fn(),
   getLogs: vi.fn(),
-  getStates: vi.fn(),
   setToken: vi.fn(),
   login: vi.fn(),
   randomNonce: () => 'n',

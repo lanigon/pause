@@ -32,32 +32,6 @@ const service = await import('../src/services/registry.service.js')
 
 beforeEach(() => vi.clearAllMocks())
 
-describe('GET /states 的参数分派', () => {
-  it('给了 businessLine 就整条线读', async () => {
-    await service.states({ businessLine: 'payment' })
-    expect(readBusinessLineStates).toHaveBeenCalledWith('payment')
-    expect(readStates).not.toHaveBeenCalled()
-  })
-
-  it('给了 ids 就按 id 读，逗号分隔并去掉空白', async () => {
-    await service.states({ ids: ' a , b ,, c ' })
-    expect(readStates).toHaveBeenCalledWith(['a', 'b', 'c'])
-  })
-
-  it('★ 两个都没给要报错，不能静默返回空 —— 前端会以为「一个合约都没有」', () => {
-    expect(() => service.states({})).toThrow('需要 businessLine 或 ids 参数')
-  })
-
-  it('★ ids 全是空白等同没给', () => {
-    expect(() => service.states({ ids: ' , , ' })).toThrow('需要 businessLine 或 ids 参数')
-  })
-
-  it('businessLine 优先于 ids（两个都给时不会读两次链）', async () => {
-    await service.states({ businessLine: 'payment', ids: 'a,b' })
-    expect(readBusinessLineStates).toHaveBeenCalledOnce()
-    expect(readStates).not.toHaveBeenCalled()
-  })
-})
 
 
 describe('系统状态', () => {

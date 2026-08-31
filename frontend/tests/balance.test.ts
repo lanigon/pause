@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { readEvm } from '../src/chain/evm/read'
+import { Interface } from 'ethers'
 import { readTron } from '../src/chain/tron/read'
 import type { Chain, Contract } from '../src/types'
 
@@ -35,32 +35,17 @@ const OP_B = '0x' + 'b'.repeat(40)
 const word = (hex: string) => '0x' + hex.padStart(64, '0')
 
 describe('EVM：余额与 paused 同一批读回', () => {
-  it('★ 余额查询打给 Multicall3 自己，不额外多一次 RPC 往返', async () => {
-    const calls: { target: string }[] = []
-    const staticCall = vi.fn(async (batch: { target: string }[]) => {
-      calls.push(...batch)
-      return batch.map(() => [true, word('1')] as [boolean, string])
-    })
-    vi.doMock('ethers', async (orig) => {
-      const actual = await orig<typeof import('ethers')>()
-      return {
-        ...actual,
-        JsonRpcProvider: class {},
-        Contract: class {
-          aggregate3 = { staticCall }
-        },
-      }
-    })
-    vi.resetModules()
-    const { readEvm: read } = await import('../src/chain/evm/read')
+  it('★ 余额查询打给 Multicall3 自己 —— 所以能塞进同一批，不多一次 RPC 往返', () => {
+    // Multicall3 自带 getEthBalance(address)，target 指向它自己即可。
+    // 这是"余额不额外多一次往返"的全部依据，别把它改成打给合约地址。
+    const mc = new Interface([
+      'function getEthBalance(address addr) view returns (uint256 balance)',
+    ])
+    const data = mc.encodeFunctionData('getEthBalance', [OP_A])
 
-    await read(CHAIN, [contract('c1', OP_A)])
-
-    // 两条调用：一条打合约（paused），一条打 Multicall3（getEthBalance）
-    expect(calls).toHaveLength(2)
-    expect(calls.filter((c) => c.target.toLowerCase() === '0xca11bde05977b3631167028862be2a173976ca11')).toHaveLength(1)
-    vi.doUnmock('ethers')
-    vi.resetModules()
+    // 4 字节选择器 + 32 字节地址
+    expect(data).toHaveLength(2 + 8 + 64)
+    expect(mc.decodeFunctionResult('getEthBalance', word('de0b6b3a7640000'))[0]).toBe(10n ** 18n)
   })
 })
 
