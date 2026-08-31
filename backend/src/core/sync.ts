@@ -126,9 +126,15 @@ function toChainId(raw: string): number | null {
  * 「morph」「Morph Mainnet」各种样子；C 列的 chainId 才是机器可校验的真身份。
  * 拿 chainId 去 chains.json 里查到哪条链，用那条链的 key。
  *
- * **id 沿用本地已有的**。Lark 是内容的真相来源，但 id 是本地的稳定标识：
- * 手工维护的可读 id（payment、morph-pausable-live）不该被同步冲成哈希，
- * 而且 operations.json 里的历史日志是按 id 引用合约的，换了 id 就对不上了。
+ * **表里没有的列一律沿用本地的**。写盘是整文件覆盖，所以「不抄过来」就等于「删掉」。
+ * 目前有两个这样的字段：
+ *
+ *   id        本地的稳定标识。手工维护的可读 id（payment、morph-pausable-live）
+ *             不该被同步冲成哈希，而且 operations.json 里的历史日志按 id 引用合约，
+ *             换了 id 就对不上了
+ *   operator  有权暂停这个合约的地址，手填。它是「紧急暂停时最怕按下去才发现
+ *             那个地址没气了」这个功能的唯一输入，而 diffContracts 不比这个字段 ——
+ *             丢了连变更摘要里都不会提一句
  *
  * 配对依据是**内在身份**，不是 id：
  *   业务线 → 名称        合约 → 链 + 地址（合约的真身份就是这个）
@@ -145,8 +151,8 @@ export function toContracts(
   const byKey = new Map(chains.map((chain) => [chain.key.toLowerCase(), chain]))
 
   const localLineIdByName = new Map(local.businessLines.map((line) => [line.name, line.id]))
-  const localContractIdByAddress = new Map(
-    local.contracts.map((contract) => [addressKey(contract.chain, contract.address), contract.id]),
+  const localByAddress = new Map(
+    local.contracts.map((contract) => [addressKey(contract.chain, contract.address), contract]),
   )
 
   const lines = new Map<string, string>()
@@ -176,15 +182,19 @@ export function toContracts(
     if (seen.has(key)) continue
     seen.add(key)
 
+    const previous = localByAddress.get(key)
+
     contracts.push({
       // 本地已有就沿用；新合约才生成。生成规则：链 + 地址前 8 位，改名不换 id
       id:
-        localContractIdByAddress.get(key) ??
+        previous?.id ??
         `${slug(chain.key)}-${record.contract.replace(/^0x/i, '').slice(0, 8).toLowerCase()}`,
       name: record.contractName || record.contract,
       businessLine: lineId,
       chain: chain.key,
       address: record.contract,
+      // 表里没有这一列，不抄过来就等于删掉（见下方 operator 的说明）
+      ...(previous?.operator ? { operator: previous.operator } : {}),
     })
   }
 

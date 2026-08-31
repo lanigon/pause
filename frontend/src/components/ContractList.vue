@@ -21,29 +21,23 @@ const allChecked = computed({
 })
 
 /**
- * operator 余额显示。
+ * 余额显示。**只有一套规则**，两个入口共用：
+ *   amountText   合约自己声明的每一个 operator
+ *   balanceText  配置里手填的那个 operator
  *
- * 三种情况要分清：没配 operator（—）、读不到（?）、真实数值。
+ * 三种情况必须长得不一样：
+ *   没配 operator  界面上根本不渲染这一格（模板里 v-if 挡掉）
+ *   读不到         「—」，灰色
+ *   真的是 0       「0」，标红
+ *
  * 读不到显示成 0 的话，运维会跑去给一个其实好好的地址充值；
  * 而真的没气时又和读不到长得一样，反倒没人当回事。
- */
-const balanceText = (contract: Contract): string => {
-  const balance = store.states.get(contract.id)?.operatorBalance
-  if (balance === undefined) return '读取中…'
-  const symbol = store.chainOf(contract.chain)?.symbol ?? ''
-  // 小额要看清几个零，大额不用；6 位有效数字够运维判断"够不够发几笔"
-  const num = Number(balance)
-  const shown = num === 0 ? '0' : num < 1 ? num.toPrecision(3) : num.toFixed(4)
-  return `${shown} ${symbol}`.trim()
-}
-
-/**
- * 把余额格成人看的样子。和 balanceText 同一套规则，只是入参不同 ——
- * 那个查配置里手填的 operator，这个查合约自己声明的每一个。
+ * 读不到也不要显示「读取中…」—— 它永远不会变成别的，只会让人一直等。
  */
 const amountText = (balance: string | undefined, chainKey: string): string => {
   if (balance === undefined) return '—'
   const symbol = store.chainOf(chainKey)?.symbol ?? ''
+  // 小额要看清几个零，大额不用；够运维判断"还能发几笔"就行
   const num = Number(balance)
   const shown = num === 0 ? '0' : num < 1 ? num.toPrecision(3) : num.toFixed(4)
   return `${shown} ${symbol}`.trim()
@@ -53,18 +47,15 @@ const amountText = (balance: string | undefined, chainKey: string): string => {
 const amountClass = (balance: string | undefined): string =>
   balance === undefined ? 'list__muted' : Number(balance) === 0 ? 'list__danger' : ''
 
+/** 手填 operator 的余额藏在 states 里，取出来交给同一套格式化 */
+const operatorBalanceOf = (contract: Contract): string | undefined =>
+  store.states.get(contract.id)?.operatorBalance
+
 /** 这个 operator 是不是你现在连着的那个钱包 */
 function isSelf(contract: Contract, address: string): boolean {
   const family = store.chainOf(contract.chain)?.type
   const mine = family ? store.connected[family] : null
   return !!mine && mine.toLowerCase() === address.toLowerCase()
-}
-
-/** 余额为 0 标红 —— 那是"按下去一定失败"，比状态未知更该被看见 */
-const balanceClass = (contract: Contract): string => {
-  const balance = store.states.get(contract.id)?.operatorBalance
-  if (balance === undefined) return 'list__muted'
-  return Number(balance) === 0 ? 'list__danger' : ''
 }
 
 const statusOf = (contract: Contract) => {
@@ -360,7 +351,9 @@ async function run(operation: Operation) {
                 rel="noreferrer"
                 :title="row.operator"
               >
-                <span :class="balanceClass(row)">{{ balanceText(row) }}</span>
+                <span :class="amountClass(operatorBalanceOf(row))">
+                  {{ amountText(operatorBalanceOf(row), row.chain) }}
+                </span>
               </a>
             </template>
           </el-table-column>

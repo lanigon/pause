@@ -157,6 +157,58 @@ describe('聚合业务线与合约', () => {
   })
 })
 
+/**
+ * 本地手工维护、而飞书表里没有的字段。
+ *
+ * 同步是**整文件覆盖写**，所以凡是表里没有的列，不主动抄过来就等于删掉。
+ * id 早就这么处理了（历史日志按 id 引用合约，换了就对不上）；
+ * operator 是同一类东西 —— 它是「紧急暂停时按下去才发现那个地址没气了」
+ * 这个功能的唯一输入，而且 diffContracts 不比这个字段，丢了连变更摘要都不会提。
+ */
+describe('同步不能冲掉本地手填的字段', () => {
+  const local = {
+    businessLines: [{ id: 'payment', name: '支付' }],
+    contracts: [
+      {
+        id: 'morph-pausable-live',
+        name: 'Vault',
+        businessLine: 'payment',
+        chain: 'morph',
+        address: '0xAbC',
+        operator: '0xDFcC6aDf45b12abeaa7b44d02524BF70F4E1Df56',
+      },
+    ],
+  }
+
+  const sync = (...list: LarkRow[]) => toContracts(parseRows(list), local, CHAINS)
+
+  it('★ operator 按「链 + 地址」沿用本地的，飞书表里没这一列不代表要删', () => {
+    const { contracts } = sync({ 业务线: '支付', 链: 'morph', chainId: '2818', 合约: '0xAbC', 名称: 'Vault' })
+    expect(contracts[0]?.operator).toBe('0xDFcC6aDf45b12abeaa7b44d02524BF70F4E1Df56')
+  })
+
+  it('地址大小写不同也认得出是同一个合约', () => {
+    const { contracts } = sync({ 业务线: '支付', 链: 'morph', chainId: '2818', 合约: '0xabc', 名称: 'Vault' })
+    expect(contracts[0]?.operator).toBe('0xDFcC6aDf45b12abeaa7b44d02524BF70F4E1Df56')
+  })
+
+  it('改名不影响 —— 配对靠的是链 + 地址，不是名称', () => {
+    const { contracts } = sync({ 业务线: '支付', 链: 'morph', chainId: '2818', 合约: '0xAbC', 名称: '新名字' })
+    expect(contracts[0]?.name).toBe('新名字')
+    expect(contracts[0]?.operator).toBe('0xDFcC6aDf45b12abeaa7b44d02524BF70F4E1Df56')
+  })
+
+  it('本地没配 operator 的合约不会凭空多出这个字段', () => {
+    const { contracts } = sync({ 业务线: '支付', 链: 'ethereum', chainId: '1', 合约: '0xNew', 名称: 'New' })
+    expect(contracts[0]).not.toHaveProperty('operator')
+  })
+
+  it('id 同样沿用本地的 —— 和 operator 走同一条配对', () => {
+    const { contracts } = sync({ 业务线: '支付', 链: 'morph', chainId: '2818', 合约: '0xAbC', 名称: 'Vault' })
+    expect(contracts[0]?.id).toBe('morph-pausable-live')
+  })
+})
+
 const URL_OK = 'https://demo.feishu.cn/base/AbC123Token?table=tblXYZ789&view=vewABC'
 
 /**

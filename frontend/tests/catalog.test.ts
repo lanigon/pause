@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
+import type { WalletAdapter } from '../src/chain'
 import type { Registry } from '../src/types'
 
 /**
@@ -16,7 +17,11 @@ vi.mock('../src/store/api', () => ({
   syncRegistry: (...args: unknown[]) => syncRegistry(...args),
   getLogs: () => getLogs(),
   setToken: vi.fn(),
-  login: vi.fn(),
+  login: vi.fn(async () => ({
+    accessToken: 't',
+    expiresIn: 60,
+    operator: { address: '0xme', label: '我', role: 'admin' },
+  })),
   randomNonce: () => 'n',
   buildLoginMessage: () => 'm',
   runBatch: vi.fn(),
@@ -44,6 +49,22 @@ const REGISTRY: Registry = {
   ],
   signers: [],
   operations: [],
+}
+
+/** 够走完 store.connect 的最小钱包 */
+function mockWallet(family: 'evm' | 'tron', address: string): WalletAdapter {
+  return {
+    id: 'mock',
+    family,
+    label: 'Mock',
+    isInstalled: () => true,
+    connect: async () => address,
+    signMessage: async () => '0xsig',
+    sendTransaction: async () => '0xhash',
+    currentChainId: async () => 1,
+    switchChain: async () => undefined,
+    onAccountChange: () => () => undefined,
+  }
 }
 
 async function store() {
@@ -304,5 +325,43 @@ describe('操作按钮的排序（位置即防误触）', () => {
     await s.bootstrap()
 
     expect(s.operations.map((o) => o.kind)).toEqual(['unpause', 'freeze', 'pause'])
+  })
+})
+
+describe('operator 校验要拿到当前钱包地址', () => {
+  /**
+   * 第一轮 multicall 里的 isOperator(viewer) 是那条提示的唯一数据来源，
+   * 而 viewer 只能从 store 传下去。不传的话那条 call 根本不会发出，
+   * ContractList 里「你当前的钱包不是这个合约的 operator」就是一段死代码 ——
+   * 界面上什么都不显示，看起来像"检查过了，没问题"。
+   */
+  it('★ 登录后读状态要带上钱包地址，否则 isOperator 那一路根本不会发', async () => {
+    const s = await store()
+    await s.connect(mockWallet('evm', '0xme'))
+
+    expect(readStates).toHaveBeenCalledWith(REGISTRY.chains, REGISTRY.contracts, {
+      evm: '0xme',
+      tron: null,
+    })
+  })
+
+  it('★ 后连的 Tron 钱包也要重问一遍 —— 它不参与登录，不会顺带触发加载', async () => {
+    const s = await store()
+    await s.connect(mockWallet('evm', '0xme'))
+    readStates.mockClear()
+
+    await s.connect(mockWallet('tron', 'Tme'))
+
+    expect(readStates).toHaveBeenCalledWith(REGISTRY.chains, REGISTRY.contracts, {
+      evm: '0xme',
+      tron: 'Tme',
+    })
+  })
+
+  it('没登录时不去读 —— 没有配置可读，白发一轮 RPC', async () => {
+    const s = await store()
+    await s.connect(mockWallet('tron', 'Tme'))
+
+    expect(readStates).not.toHaveBeenCalled()
   })
 })

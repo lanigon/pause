@@ -50,14 +50,28 @@ function onPanelChange(date: Date): void {
   void store.loadDailyCounts(monthOf(toDay(date)))
 }
 
-const STATUS: Readonly<
-  Record<TxLogStatus, { label: string; type: 'success' | 'danger' | 'warning' | 'info' }>
-> = {
+interface StatusTag {
+  label: string
+  type: 'success' | 'danger' | 'warning' | 'info'
+}
+
+const STATUS: Readonly<Record<TxLogStatus, StatusTag>> = {
   confirmed: { label: '已确认', type: 'success' },
   failed: { label: '失败', type: 'danger' },
   broadcast: { label: '已广播', type: 'warning' },
   cancelled: { label: '已取消', type: 'info' },
 }
+
+/**
+ * 认不出的状态原样显示，不要直接 `STATUS[status].type`。
+ *
+ * operations.json 是磁盘上的一个普通 JSON，读回来时不过 schema —— 历史记录里
+ * 可能有早先版本写的状态值，手工编辑过的文件更是什么都可能有。下标取不到时
+ * 读 `.type` 会抛错，而它在 v-for 里，一条脏数据就让**整个日志面板变白**。
+ * 和 operationLabel 同一个原则：显示不出来也好过显示错，更好过什么都不显示。
+ */
+const statusTag = (status: string): StatusTag =>
+  STATUS[status as TxLogStatus] ?? { label: status, type: 'info' }
 
 /** 同一笔交易可能有多条记录，哈希是它的身份；缺哈希的退回时间+合约 */
 const keyOf = (entry: OperationLog): string => entry.hash || `${entry.ts}-${entry.contract}`
@@ -144,8 +158,8 @@ const explorerUrl = (chain: string, hash: string): string =>
     <div ref="body" class="log__body">
       <div v-for="entry in finalized" :key="keyOf(entry)" class="log__row">
         <span class="log__time">{{ time(entry.ts) }}</span>
-        <el-tag size="small" :type="STATUS[entry.status].type" effect="plain">
-          {{ STATUS[entry.status].label }}
+        <el-tag size="small" :type="statusTag(entry.status).type" effect="plain">
+          {{ statusTag(entry.status).label }}
         </el-tag>
         <!-- 中文名从后端下发的操作清单取；二选一的老写法会把别的操作也显示成"恢复" -->
         <span class="log__op">{{ store.operationLabel(entry.operation) }}</span>

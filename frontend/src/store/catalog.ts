@@ -14,15 +14,15 @@ import type {
   SyncResult,
 } from '../types'
 
-/**
- * 后端没下发操作清单时用的兜底。
- *
- * 老版本后端的 /registry 里没有 operations 字段，配置还在加载时它也是空的 ——
- * 这两种情况下不能让按钮消失：一个没有暂停按钮的紧急暂停界面等于没有界面。
- */
 /** 风险等级，决定按钮从左到右的顺序 */
 const RISK: Readonly<Record<string, number>> = { unpause: 0, pause: 2 }
 
+/**
+ * 后端没下发操作清单时用的兜底。
+ *
+ * 配置还在加载时清单是空的，老后端也可能压根不下发这个字段 ——
+ * 这两种情况下不能让按钮消失：一个没有暂停按钮的紧急暂停界面等于没有界面。
+ */
 const FALLBACK_OPERATIONS: readonly Operation[] = [
   { kind: 'pause', label: '暂停' },
   { kind: 'unpause', label: '恢复' },
@@ -31,7 +31,7 @@ const FALLBACK_OPERATIONS: readonly Operation[] = [
 /**
  * 配置目录与链上状态：看得见什么、选中了什么、现在是什么状态。
  *
- * 配置一个接口拿全（/registry），链上状态优先自己 multicall 读。
+ * 配置一个接口拿全（/registry/sync），链上状态由前端自己 multicall 读。
  */
 export function useCatalog(session: Session) {
   const registry = shallowRef<Registry | null>(null)
@@ -62,11 +62,10 @@ export function useCatalog(session: Session) {
   const chainOf = (key: string): Chain | undefined => chains.value.find((c) => c.key === key)
 
   /**
-   * 能做哪些操作，由后端说了算 —— 界面上的按钮、确认框文案、日志里的中文名
-   * 全从这份清单来，后端加一种操作前端零改动。
-   */
-  /**
    * 可执行的操作，**按风险从低到高排**。
+   *
+   * 有哪些操作由后端说了算 —— 界面上的按钮、确认框文案、日志里的中文名
+   * 全从这份清单来，后端加一种操作前端零改动。排序则是前端的事：
    *
    * 位置本身是防误触的一环 —— 运维形成的肌肉记忆是"最右边那个是暂停"。
    * 让后端数组顺序决定它，等于某天后端加个操作就把暂停挪了位，
@@ -191,7 +190,7 @@ export function useCatalog(session: Session) {
    *
    * 配置走同步接口 —— 后端会先跟 Lark 对一遍再把数据给我们，
    * 过程通过 SSE 推过来（拉取 / 比对 / 应用），进度存进 syncEvents 给 UI 展示。
-   * 同步接口本身挂了才退回纯本地的 /registry —— 数据比进度重要。
+   * 它挂了就是加载失败，没有别的入口 —— 取数只有这一条路。
    */
   async function bootstrap(force = false): Promise<void> {
     loading.value = true
@@ -241,13 +240,18 @@ export function useCatalog(session: Session) {
    * 而真触发时后端在那几条链上同样读不到，救不了任何东西。
    *
    * 读不到就显示"未知"，快捷勾选也不会勾它 —— 不确定的事不替用户做决定。
+   *
+   * 带上当前连着的钱包地址：同一轮 multicall 里顺便问一句
+   * 「它是不是这些合约的 operator」。不带的话那条 call 根本不会发出，
+   * 界面上「你不是这个合约的 operator」就永远提示不出来 ——
+   * 看起来像检查过了没问题，实际是钱包模式下必然失败的一批。
    */
   async function refreshStates(): Promise<void> {
     const reg = registry.value
     if (!reg) return
 
     // 整体失败也不抛：某条链挂了不该让其余链的状态一起消失
-    const next = await readStates(reg.chains, reg.contracts).catch(
+    const next = await readStates(reg.chains, reg.contracts, session.connected.value).catch(
       () => new Map<string, ContractState>(),
     )
 
@@ -353,12 +357,8 @@ export function useCatalog(session: Session) {
   }
 
   /**
-   * 按当前链上状态快捷勾选。
-   * 需暂停 = 现在还在运行的；需恢复 = 现在已经暂停的。
-   * 状态读不到的（RPC 挂了）不勾 —— 不确定的事情不替用户做决定。
-   */
-  /**
    * 按链上状态快捷勾选，**只作用于一条业务线**。
+   * 需暂停 = 现在还在运行的；需恢复 = 现在已经暂停的。
    *
    * 没有全局版本：紧急时是「先把支付停了」这种粒度，
    * 一个按钮横扫所有业务线太容易误伤 —— 而且顶栏已经有全选了。
